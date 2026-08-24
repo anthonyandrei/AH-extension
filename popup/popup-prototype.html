@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PROTOTYPE — popup shape (issue #12)</title>
+<!--
+  THROWAWAY PROTOTYPE. Not loaded by the extension; not production code.
+  Three variants of the popup, switchable via ?variant=A|B|C, each renderable
+  in any Vigil state via ?scenario=. Answers issue #12: arming, liveness,
+  the Run Report, stopping by hand, and how a Wanted Section is collected.
+  Double-click this file to open it. All data is fixture data.
+-->
+<style>
+:root {
+  /* Dark, committed. Scene: 11pm arming with the lights off, 7am reading what
+     happened before getting out of bed. Both ends of this tool are low-light.
+     Accent is DLSU green — the institution's own, not a default blue. */
+  --bg:        oklch(0.19 0.012 160);
+  --surface:   oklch(0.235 0.013 160);
+  --surface-2: oklch(0.28 0.014 160);
+  --line:      oklch(0.34 0.014 160);
+  --line-soft: oklch(0.30 0.012 160);
+  --ink:       oklch(0.97 0.005 160);
+  --ink-2:     oklch(0.80 0.010 160);
+  --ink-3:     oklch(0.665 0.012 160);
+
+  --accent:      oklch(0.72 0.15 155);
+  --accent-ink:  oklch(0.22 0.05 155);
+  --accent-dim:  oklch(0.42 0.07 155);
+
+  --amber:     oklch(0.80 0.14 78);
+  --amber-dim: oklch(0.40 0.07 78);
+  --red:       oklch(0.70 0.17 25);
+  --red-dim:   oklch(0.40 0.09 25);
+  --blue:      oklch(0.76 0.11 245);
+  --blue-dim:  oklch(0.38 0.06 245);
+
+  --r-sm: 5px; --r-md: 8px; --r-lg: 12px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --z-sheet: 40; --z-bar: 60;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: oklch(0.42 0.02 250);
+  background-image: radial-gradient(ellipse at 50% -10%, oklch(0.50 0.03 250), oklch(0.34 0.02 250) 70%);
+  min-height: 100vh; padding: 28px 20px 120px;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- mock browser chrome, so the badge sits where it really sits ---------- */
+.stage { width: 560px; margin: 0 auto; }
+.toolbar {
+  height: 40px; border-radius: 9px 9px 0 0;
+  background: oklch(0.26 0.008 250); border: 1px solid oklch(0.32 0.01 250);
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 10px; padding: 0 12px;
+}
+.toolbar .urlbar {
+  flex: 1; height: 22px; border-radius: 11px; background: oklch(0.21 0.008 250);
+  font-size: 11px; color: oklch(0.62 0.01 250); display: flex; align-items: center;
+  padding: 0 10px; font-family: var(--mono);
+}
+.ext-icon {
+  position: relative; width: 26px; height: 26px; border-radius: 6px;
+  background: var(--surface-2); display: grid; place-items: center;
+  font-size: 13px; box-shadow: 0 0 0 1px oklch(0.36 0.01 250);
+}
+.badge {
+  position: absolute; right: -4px; bottom: -3px; min-width: 15px; height: 14px;
+  border-radius: 7px; padding: 0 3px; font: 700 9px/14px var(--mono);
+  text-align: center; color: #fff; box-shadow: 0 0 0 1.5px oklch(0.26 0.008 250);
+}
+.badge[data-tone="grey"]  { background: oklch(0.55 0.01 250); }
+.badge[data-tone="blue"]  { background: oklch(0.55 0.16 250); }
+.badge[data-tone="amber"] { background: oklch(0.68 0.16 70); color: oklch(0.20 0.04 70); }
+.badge[data-tone="red"]   { background: oklch(0.55 0.20 25); }
+.badge[data-tone="dark"]  { background: oklch(0.40 0.16 25); }
+.badge[data-tone="green"] { background: oklch(0.52 0.14 155); }
+.badge[data-tone="none"]  { display: none; }
+.toolbar-note {
+  font-size: 11px; color: oklch(0.80 0.02 250); text-align: right;
+  margin: 6px 2px 0; letter-spacing: 0.01em;
+}
+
+.popup-wrap { display: flex; justify-content: flex-end; }
+.popup {
+  background: var(--bg); color: var(--ink);
+  border-radius: 0 0 10px 10px; overflow: hidden;
+  box-shadow: 0 18px 40px -12px oklch(0.15 0.02 250 / 0.7), 0 0 0 1px oklch(0.32 0.01 250);
+  max-height: 600px; overflow-y: auto; position: relative;
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+}
+
+/* ---------- shared popup atoms ---------- */
+.hdr { display: flex; align-items: center; gap: 8px; padding: 12px 14px 10px; }
+.hdr h1 { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; flex: 1; }
+.hdr .sub { font-size: 11px; color: var(--ink-3); font-weight: 400; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  border-radius: 999px; padding: 3px 9px 3px 7px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.01em;
+}
+.chip .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.chip[data-tone="idle"]    { background: var(--surface-2); color: var(--ink-2); }
+.chip[data-tone="armed"]   { background: var(--blue-dim);  color: var(--blue); }
+.chip[data-tone="live"]    { background: var(--accent-dim);color: var(--accent); }
+.chip[data-tone="warn"]    { background: var(--amber-dim); color: var(--amber); }
+.chip[data-tone="bad"]     { background: var(--red-dim);   color: var(--red); }
+.chip[data-tone="done"]    { background: var(--accent-dim);color: var(--accent); }
+.chip .live-dot { animation: pulse 2.4s var(--ease) infinite; }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }
+
+.sec { padding: 0 14px 12px; }
+.sec-h {
+  font-size: 11px; color: var(--ink-3); font-weight: 500;
+  display: flex; align-items: baseline; justify-content: space-between;
+  padding: 10px 0 6px;
+}
+.sec-h b { color: var(--ink-2); font-weight: 500; }
+
+.btn {
+  font: 600 12.5px/1 inherit; border: 1px solid transparent; cursor: pointer;
+  border-radius: var(--r-md); padding: 9px 13px; color: var(--ink);
+  background: var(--surface-2); transition: background 160ms var(--ease), border-color 160ms var(--ease), opacity 160ms;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.btn:hover  { background: var(--line); }
+.btn:active { transform: translateY(0.5px); }
+.btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: var(--accent-ink); }
+.btn-primary:hover { background: oklch(0.78 0.15 155); }
+.btn-ghost { background: transparent; border-color: var(--line); color: var(--ink-2); }
+.btn-ghost:hover { background: var(--surface); color: var(--ink); }
+.btn-danger { background: transparent; border-color: var(--red-dim); color: var(--red); }
+.btn-danger:hover { background: var(--red-dim); color: oklch(0.95 0.03 25); }
+.btn-block { width: 100%; }
+.btn-lg { padding: 11px 14px; font-size: 13px; }
+
+.note {
+  border-radius: var(--r-md); padding: 9px 11px; font-size: 11.5px; line-height: 1.45;
+  border: 1px solid var(--line-soft); background: var(--surface); color: var(--ink-2);
+}
+.note b { color: var(--ink); font-weight: 600; }
+.note[data-tone="bad"]  { border-color: var(--red-dim);   background: oklch(0.26 0.04 25); }
+.note[data-tone="warn"] { border-color: var(--amber-dim); background: oklch(0.27 0.035 78); }
+.note[data-tone="good"] { border-color: var(--accent-dim);background: oklch(0.26 0.035 155); }
+.note-t { display: block; color: var(--ink); font-weight: 600; margin-bottom: 2px; }
+
+.k { font-family: var(--mono); font-size: 11px; }
+.muted { color: var(--ink-3); }
+.empty { color: var(--ink-3); font-size: 12px; text-align: center; padding: 18px 10px; }
+
+/* subject row (shared vocabulary across variants; each lays it out differently) */
+.subj-status { font-size: 10.5px; font-weight: 600; letter-spacing: 0.01em; }
+.st-done  { color: var(--accent); }
+.st-chase { color: var(--amber); }
+.st-wait  { color: var(--ink-3); }
+.st-lost  { color: var(--red); }
+
+/* pass tail rows */
+.pass { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items: baseline;
+        padding: 4px 0; font-size: 11px; border-top: 1px solid var(--line-soft); }
+.pass:first-child { border-top: 0; }
+.pass time { font-family: var(--mono); color: var(--ink-3); font-size: 10.5px; }
+.pass .txt { color: var(--ink-2); }
+.pass .iv  { font-family: var(--mono); color: var(--ink-3); font-size: 10px; }
+.pass[data-o="saved"] .txt { color: var(--accent); }
+.pass[data-o="gate"]  .txt { color: var(--amber); }
+.pass[data-o="err"]   .txt { color: var(--red); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* ================= VARIANT A — state-led single column ================= */
+.vA .a-hero { padding: 4px 14px 14px; }
+.vA .a-line { font-size: 15px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.3; }
+.vA .a-why  { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+.vA .a-roster { display: flex; flex-direction: column; }
+.vA .a-subj {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 8px 0; border-top: 1px solid var(--line-soft);
+}
+.vA .a-subj:first-child { border-top: 0; }
+.vA .a-code { font-weight: 600; font-size: 12.5px; width: 76px; flex: none; }
+.vA .a-move { font-size: 11px; color: var(--ink-3); font-family: var(--mono); }
+.vA .a-move em { font-style: normal; color: var(--ink-2); }
+.vA .a-stat { margin-left: auto; text-align: right; }
+details.a-more { border-top: 1px solid var(--line-soft); }
+details.a-more > summary {
+  list-style: none; cursor: pointer; padding: 10px 0 9px; font-size: 11.5px; color: var(--ink-3);
+  display: flex; align-items: center; gap: 6px;
+}
+details.a-more > summary::-webkit-details-marker { display: none; }
+details.a-more > summary::before { content: "›"; transition: transform 160ms var(--ease); display: inline-block; }
+details.a-more[open] > summary::before { transform: rotate(90deg); }
+details.a-more > summary:hover { color: var(--ink-2); }
+.a-check { display: flex; flex-direction: column; gap: 7px; }
+.a-check li { display: flex; gap: 8px; font-size: 11.5px; color: var(--ink-2); list-style: none; align-items: flex-start; }
+.a-check .mark { color: var(--accent); font-size: 11px; line-height: 1.5; }
+.a-check .mark.no { color: var(--amber); }
+.a-check .mark.bad { color: var(--red); }
+.vA .a-foot { padding: 10px 14px 14px; border-top: 1px solid var(--line-soft); display: flex; gap: 8px; }
+.vA .a-picker { display: flex; flex-direction: column; gap: 6px; }
+.vA .a-search {
+  width: 100%; background: var(--surface); border: 1px solid var(--line); color: var(--ink);
+  border-radius: var(--r-md); padding: 8px 10px; font: inherit; font-size: 12.5px;
+}
+.vA .a-search::placeholder { color: var(--ink-3); }
+.vA .a-search:focus { outline: none; border-color: var(--accent); }
+.vA .a-grid { display: flex; flex-wrap: wrap; gap: 5px; }
+.vA .a-sect {
+  border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-sm);
+  padding: 5px 8px; font: 600 11px/1 var(--mono); color: var(--ink-2); cursor: pointer;
+  display: flex; align-items: baseline; gap: 5px;
+}
+.vA .a-sect small { font-family: inherit; font-weight: 400; color: var(--ink-3); font-size: 9.5px; }
+.vA .a-sect:hover { border-color: var(--ink-3); color: var(--ink); }
+.vA .a-sect[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.vA .a-sect[aria-pressed="true"] small { color: oklch(0.36 0.06 155); }
+.vA .a-sect[data-full="1"] small { color: var(--amber); }
+
+/* ================= VARIANT B — Plan / Run / Report tabs ================= */
+.vB .b-tabs { display: flex; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--line-soft); }
+.vB .b-tab {
+  appearance: none; background: none; border: 0; cursor: pointer; position: relative;
+  padding: 9px 11px 10px; font: 500 12px/1 inherit; color: var(--ink-3);
+  transition: color 150ms var(--ease);
+}
+.vB .b-tab:hover { color: var(--ink-2); }
+.vB .b-tab[aria-selected="true"] { color: var(--ink); font-weight: 600; }
+.vB .b-tab[aria-selected="true"]::after {
+  content: ""; position: absolute; inset: auto 8px -1px; height: 2px; background: var(--accent); border-radius: 2px 2px 0 0;
+}
+.vB .b-tab .pip { display: inline-block; width: 5px; height: 5px; border-radius: 50%; margin-left: 5px; vertical-align: 1px; }
+.vB table.b-plan { width: 100%; border-collapse: collapse; font-size: 12px; }
+.vB table.b-plan th {
+  text-align: left; font-weight: 500; font-size: 10.5px; color: var(--ink-3);
+  padding: 0 6px 6px 0; border-bottom: 1px solid var(--line-soft);
+}
+.vB table.b-plan td { padding: 7px 6px 7px 0; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+.vB table.b-plan tr:last-child td { border-bottom: 0; }
+.vB select.b-sel {
+  appearance: none; background: var(--surface) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5'><path d='M0 0h8L4 5z' fill='%23999'/></svg>") no-repeat right 7px center;
+  border: 1px solid var(--line); color: var(--ink); border-radius: var(--r-sm);
+  padding: 5px 20px 5px 7px; font: 500 11.5px/1.2 var(--mono); width: 100%; cursor: pointer;
+}
+.vB select.b-sel:focus { outline: none; border-color: var(--accent); }
+.vB .b-check { font-size: 10.5px; }
+.vB .b-x { appearance: none; background: none; border: 0; color: var(--ink-3); cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 0 2px 4px; }
+.vB .b-x:hover { color: var(--red); }
+.vB .b-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line-soft); border: 1px solid var(--line-soft); border-radius: var(--r-md); overflow: hidden; }
+.vB .b-stat { background: var(--surface); padding: 8px 10px; }
+.vB .b-stat dt { font-size: 10px; color: var(--ink-3); margin-bottom: 2px; }
+.vB .b-stat dd { font: 600 13px/1.1 var(--mono); color: var(--ink); }
+.vB .b-filters { display: flex; gap: 4px; padding-bottom: 8px; flex-wrap: wrap; }
+.vB .b-filter {
+  appearance: none; border: 1px solid var(--line); background: transparent; color: var(--ink-3);
+  border-radius: 999px; padding: 3px 9px; font: 500 10.5px/1.4 inherit; cursor: pointer;
+}
+.vB .b-filter:hover { color: var(--ink-2); border-color: var(--ink-3); }
+.vB .b-filter[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); border-color: var(--line); }
+.ev { display: grid; grid-template-columns: 46px 1fr; gap: 9px; padding: 7px 0; border-top: 1px solid var(--line-soft); font-size: 11.5px; }
+.ev:first-child { border-top: 0; }
+.ev time { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+.ev .t { font-weight: 600; }
+.ev .c { color: var(--ink-3); font-size: 11px; }
+.ev[data-tier="alert"]  .t { color: var(--red); }
+.ev[data-tier="notice"] .t { color: var(--amber); }
+.ev[data-tier="ambient"] .t { color: var(--ink-2); font-weight: 500; }
+
+/* ================= VARIANT C — ledger spine ================= */
+.vC .c-strip { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--line-soft); }
+.vC .c-strip-top { display: flex; align-items: center; gap: 8px; padding: 10px 12px 8px; }
+.vC .c-pills { display: flex; gap: 4px; padding: 0 12px 9px; flex-wrap: wrap; }
+.vC .c-pill {
+  border-radius: var(--r-sm); padding: 4px 7px; font: 600 10.5px/1.2 var(--mono);
+  background: var(--surface); border: 1px solid var(--line-soft); color: var(--ink-2);
+  display: flex; gap: 5px; align-items: baseline;
+}
+.vC .c-pill small { font-weight: 400; font-size: 9.5px; }
+.vC .c-pill[data-s="done"]  { border-color: var(--accent-dim); color: var(--accent); }
+.vC .c-pill[data-s="chase"] { border-color: var(--amber-dim); color: var(--amber); }
+.vC .c-pill[data-s="lost"]  { border-color: var(--red-dim); color: var(--red); }
+.vC .c-feed { padding: 4px 12px 14px; }
+.vC .c-item { display: grid; grid-template-columns: 44px 1fr; gap: 9px; padding: 8px 0; }
+.vC .c-item + .c-item { border-top: 1px solid var(--line-soft); }
+.vC .c-item time { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); padding-top: 1px; }
+.vC .c-t { font-size: 12px; font-weight: 600; }
+.vC .c-c { font-size: 11px; color: var(--ink-3); margin-top: 1px; }
+.vC .c-item[data-tier="alert"]  .c-t { color: var(--red); }
+.vC .c-item[data-tier="notice"] .c-t { color: var(--amber); }
+.vC .c-item[data-tier="ambient"] .c-t { color: var(--ink); }
+.vC .c-item[data-tier="quiet"] { padding: 5px 0; }
+.vC .c-item[data-tier="quiet"] .c-t { font-weight: 400; font-size: 11px; color: var(--ink-3); }
+.vC .c-open { appearance: none; background: none; border: 0; padding: 0; margin-left: 6px;
+  font: inherit; font-size: 10.5px; color: var(--blue); cursor: pointer; text-decoration: underline; }
+.vC .c-screen { position: absolute; inset: 0; background: var(--bg); z-index: var(--z-sheet);
+  animation: pushin 200ms var(--ease); display: flex; flex-direction: column; }
+@keyframes pushin { from { transform: translateX(14px); opacity: 0 } to { transform: none; opacity: 1 } }
+.vC .c-back { appearance: none; background: none; border: 0; color: var(--ink-2); cursor: pointer;
+  font: 600 12px/1 inherit; display: flex; align-items: center; gap: 6px; padding: 13px 12px 11px; }
+.vC .c-back:hover { color: var(--ink); }
+.vC textarea.c-paste {
+  width: 100%; min-height: 98px; resize: vertical; background: var(--surface);
+  border: 1px solid var(--line); color: var(--ink); border-radius: var(--r-md);
+  padding: 9px 10px; font: 12px/1.6 var(--mono);
+}
+.vC textarea.c-paste:focus { outline: none; border-color: var(--accent); }
+.vC .c-res { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 9px; align-items: baseline;
+  font-size: 11.5px; padding: 6px 0; border-top: 1px solid var(--line-soft); }
+.vC .c-res .g { font-size: 11px; }
+.vC .c-res .g.ok { color: var(--accent); }
+.vC .c-res .g.no { color: var(--amber); }
+.vC .c-res code { font: 11.5px var(--mono); }
+
+/* ================= prototype switcher (not part of the design) ============ */
+.switcher {
+  position: fixed; z-index: var(--z-bar); left: 50%; bottom: 20px; transform: translateX(-50%);
+  display: flex; align-items: stretch; gap: 0; border-radius: 999px; overflow: hidden;
+  background: oklch(0.14 0.01 250); box-shadow: 0 10px 30px -8px oklch(0.10 0.02 250 / 0.8), 0 0 0 1px oklch(0.30 0.01 250);
+  font: 500 12px/1 -apple-system, BlinkMacSystemFont, sans-serif; color: #fff;
+}
+.switcher button { appearance: none; background: none; border: 0; color: #fff; cursor: pointer;
+  padding: 0 14px; font: inherit; transition: background 140ms var(--ease); }
+.switcher button:hover { background: oklch(0.24 0.01 250); }
+.switcher .label { padding: 11px 6px; min-width: 210px; text-align: center; }
+.switcher .label b { font-weight: 600; }
+.switcher .label span { color: oklch(0.70 0.01 250); font-weight: 400; }
+.switcher .div { width: 1px; background: oklch(0.28 0.01 250); }
+.switcher select {
+  appearance: none; background: none; border: 0; color: #fff; font: inherit; cursor: pointer;
+  padding: 11px 26px 11px 12px; outline: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5'><path d='M0 0h8L4 5z' fill='white'/></svg>");
+  background-repeat: no-repeat; background-position: right 11px center;
+}
+.switcher select option { background: oklch(0.18 0.01 250); }
+.hint { position: fixed; bottom: 6px; left: 50%; transform: translateX(-50%); z-index: var(--z-bar);
+  font-size: 10.5px; color: oklch(0.80 0.02 250); }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="toolbar">
+      <div class="urlbar">archershub.dlsu.edu.ph/Enlistment_V2/Index</div>
+      <div class="ext-icon">🏹<span class="badge" id="badge"></span></div>
+    </div>
+    <div class="popup-wrap"><div class="popup" id="popup"></div></div>
+    <p class="toolbar-note" id="badgeNote"></p>
+  </div>
+
+  <div class="switcher">
+    <button id="prev" title="Previous variant (←)">‹</button>
+    <div class="label" id="vlabel"></div>
+    <button id="next" title="Next variant (→)">›</button>
+    <div class="div"></div>
+    <select id="scenario" title="Vigil state"></select>
+  </div>
+  <p class="hint">← → switch variant · the dropdown puts that variant in a different Vigil state</p>
+
+<script>
+/* ------------------------------------------------------------------ fixtures
+   Anthony's real situation: Saved Slots already held in CSC612M, GERIZAL (Z18)
+   and MSLABS2, by his own hand. A Section absent from the dropdown is full. */
+
+const CATALOG = {
+  CSC612M: { name: "Advanced Software Engineering",
+             sections: [ {c:"S11", left:0, mine:true}, {c:"S12", left:3}, {c:"S13", full:true} ] },
+  GERIZAL: { name: "Life and Works of Rizal",
+             sections: [ {c:"Z18", left:0, mine:true}, {c:"Z21", left:4}, {c:"Z25", full:true} ] },
+  MSLABS2: { name: "Machine Shop Laboratory 2",
+             sections: [ {c:"X22", left:0, mine:true}, {c:"X23", left:5} ] },
+  CSC615M: { name: "Distributed Computing",
+             sections: [ {c:"S14", full:true}, {c:"S15", left:2} ] },
+};
+const S = (code, wanted, held, status) => ({ code, name: CATALOG[code].name, wanted, held, status });
+const PLAN = () => [
+  S("CSC612M","S11","S11","done"),
+  S("GERIZAL","Z25","Z18","chase"),
+  S("MSLABS2","X22","X22","done"),
+  S("CSC615M","S15",null,"wait"),
+];
+const STATUS_TEXT = { done:"at Wanted", chase:"chasing", wait:"waiting", lost:"SLOT LOST" };
+const STATUS_CLASS = { done:"st-done", chase:"st-chase", wait:"st-wait", lost:"st-lost" };
+
+/* pass tail: [time, outcome, text, interval] — newest first */
+const TAIL_WATCH = [
+  ["07:34:02","nochange","No change — Z25 absent, S15 absent","34s"],
+  ["07:33:28","nochange","No change — Z25 absent, S15 absent","23s"],
+  ["07:33:05","err","GetAllCourseSectionData → 500, retried","23s"],
+  ["07:32:42","nochange","No change — Z25 absent, S15 absent","15s"],
+  ["07:32:27","reload","Owned Tab reloaded — STEP 2 rebound","—"],
+  ["07:32:17","nochange","No change — Z25 absent, S15 absent","10s"],
+  ["07:32:07","nochange","No change — Z25 absent, S15 absent","7s"],
+  ["07:32:00","nochange","No change — Z25 absent, S15 absent","4s"],
+  ["07:31:56","nochange","No change — Z25 absent, S15 absent","3s"],
+  ["07:31:53","saved","Saved Course Selection — 4 rows, Save Gate passed","2s"],
+  ["07:31:51","nochange","S15 appeared — reset to 2s","2s"],
+  ["07:30:44","nochange","No change — Z25 absent, S15 absent","60s"],
+];
+const TAIL_STALL = [
+  ["07:34:10","gate","Save Gate refused — MSLABS2 row not bound","60s"],
+  ["07:33:08","gate","Save Gate refused — MSLABS2 row not bound","60s"],
+  ["07:32:05","err","GetAllCourseSectionData → 403","60s"],
+  ["07:31:03","gate","Save Gate refused — MSLABS2 row not bound","60s"],
+  ["07:30:01","err","GetAllCourseSectionData → 403","60s"],
+  ["07:28:59","gate","Save Gate refused — MSLABS2 row not bound","60s"],
+  ["07:24:12","nochange","No change — Z25 absent","60s"],
+  ["07:23:10","nochange","No change — Z25 absent","60s"],
+];
+const TAIL_QUIET = [
+  ["03:12:40","err","Probe → login page, still logged out","30s"],
+  ["03:12:10","err","Probe → login page, still logged out","30s"],
+  ["03:11:40","err","Probe → login page, still logged out","30s"],
+  ["03:11:12","err","GET /Enlistment_V2/Index → 302 to login","34s"],
+  ["03:10:38","nochange","No change — Z25 absent, S15 absent","34s"],
+];
+const E = (t, tier, title, cause) => ({ t, tier, title, cause });
+
+const SCENARIOS = {
+  firstrun: {
+    label: "First run — nothing configured", vigil: "none", session: "live",
+    badge: { text:"", tone:"none", note:"Nothing armed — the badge is empty." },
+    subjects: [], events: [], passes: [],
+  },
+  unarmed: {
+    label: "Plan set — not armed yet", vigil: "none", session: "live",
+    badge: { text:"", tone:"none", note:"Nothing armed — the badge is empty." },
+    subjects: PLAN(), starts: "Wed 26 Aug, 07:00", events: [], passes: [],
+  },
+  refused: {
+    label: "Arming refused — session is dead", vigil: "none", session: "dead",
+    badge: { text:"", tone:"none", note:"Nothing armed — the badge is empty." },
+    subjects: PLAN(), starts: "Wed 26 Aug, 07:00", refused: true, events: [], passes: [],
+  },
+  armed: {
+    label: "Armed — waiting for 07:00", vigil: "armed", session: "live",
+    badge: { text:"•", tone:"grey", note:"Armed, not yet watching." },
+    subjects: PLAN(), starts: "Wed 26 Aug, 07:00", now: "Tue 25 Aug, 23:12", countdown: "7h 48m",
+    events: [ E("23:12","ambient","Vigil armed","Session checked and live · starts Wed 07:00") ],
+    passes: [],
+  },
+  watching: {
+    label: "Watching — 2 subjects left", vigil: "watching", session: "live",
+    badge: { text:"2", tone:"blue", note:"2 — subjects not yet at their Wanted Section." },
+    subjects: PLAN(), started: "07:00", elapsed: "34m", pass: 412, interval: "34s",
+    events: [
+      E("07:31","ambient","CSC615M saved at S15","S15 reappeared and was taken"),
+      E("07:02","ambient","Owned Tab opened","STEP 2 bound, strike-ready"),
+      E("07:00","ambient","Vigil started","4 subjects requested, 2 already at their Wanted Section"),
+      E("23:12","ambient","Vigil armed","Session checked and live"),
+    ],
+    passes: TAIL_WATCH,
+  },
+  suspended: {
+    label: "Suspended — session gone at 03:12", vigil: "suspended", session: "dead",
+    badge: { text:"!", tone:"amber", note:"! — Suspended. It is alive but watching nothing." },
+    subjects: PLAN(), started: "07:00", since: "03:12", elapsed: "4h 22m", pass: 1188, interval: "30s flat",
+    events: [
+      E("03:12","alert","Vigil Suspended","Session gone — probing every 30s, resumes on its own"),
+      E("22:41","ambient","Vigil started","4 subjects requested"),
+    ],
+    passes: TAIL_QUIET,
+  },
+  stall: {
+    label: "Stall — 10 min, no complete Pass", vigil: "stall", session: "live",
+    badge: { text:"!!", tone:"red", note:"!! — Stalled. Alive, turning, achieving nothing." },
+    subjects: PLAN(), started: "07:00", elapsed: "34m", pass: 1188, interval: "60s",
+    stallSince: "07:24",
+    events: [
+      E("07:34","alert","Stall","10 minutes with no complete Pass — Save Gate refusing, MSLABS2 row not bound"),
+      E("07:00","ambient","Vigil started","4 subjects requested"),
+    ],
+    passes: TAIL_STALL,
+  },
+  lost: {
+    label: "A Saved Slot was lost", vigil: "watching", session: "live",
+    badge: { text:"2", tone:"blue", note:"2 — MSLABS2 went back to unresolved when its Slot was lost." },
+    subjects: [ S("CSC612M","S11","S11","done"), S("GERIZAL","Z25","Z18","chase"),
+                S("MSLABS2","X22",null,"lost"), S("CSC615M","S15","S15","done") ],
+    started: "07:00", elapsed: "34m", pass: 894, interval: "2s",
+    events: [
+      E("07:29","notice","MSLABS2 slot lost","Post-save diff: X22 was held before the save and is not held after"),
+      E("07:29","ambient","GERIZAL switch attempted","Z25 appeared; the save came back capacity-full"),
+      E("07:00","ambient","Vigil started","4 subjects requested"),
+    ],
+    passes: [
+      ["07:29:41","nochange","No change — X22 absent, Z25 absent","2s"],
+      ["07:29:38","err","Save returned 4 — Section capacity is full","2s"],
+      ["07:29:36","saved","Saved Course Selection — 4 rows, Save Gate passed","2s"],
+      ["07:29:34","nochange","Z25 appeared — reset to 2s","2s"],
+    ],
+  },
+  complete: {
+    label: "Complete — everything held, at Pending", vigil: "complete", session: "live",
+    badge: { text:"✓", tone:"green", note:"✓ — every subject at its Wanted Section." },
+    subjects: [ S("CSC612M","S11","S11","done"), S("GERIZAL","Z25","Z25","done"),
+                S("MSLABS2","X22","X22","done"), S("CSC615M","S15","S15","done") ],
+    started: "07:00", ended: "07:41", elapsed: "41m", pass: 1402,
+    events: [
+      E("07:41","notice","Complete","Every subject at its Wanted Section · enlistment is Pending"),
+      E("07:41","ambient","GERIZAL switched to Z25","Z18 released, Z25 held, in one save"),
+      E("07:31","ambient","CSC615M saved at S15","S15 reappeared and was taken"),
+      E("07:00","ambient","Vigil started","4 subjects requested"),
+    ],
+    passes: [
+      ["07:41:02","saved","Saved Course Selection — 4 rows, Save Gate passed","2s"],
+      ["07:41:00","nochange","Z25 appeared — reset to 2s","2s"],
+      ["07:40:00","nochange","No change — Z25 absent","60s"],
+    ],
+  },
+  abort: {
+    label: "Aborted — page could not be classified", vigil: "abort", session: "live",
+    badge: { text:"X", tone:"dark", note:"X — aborted. It will not resume on its own." },
+    subjects: PLAN(), started: "07:00", ended: "04:02", pass: 741,
+    events: [
+      E("04:02","alert","Aborted — Unrecognised page","No known Page State matched. DOM captured; the Owned Tab is left open as evidence."),
+      E("22:41","ambient","Vigil started","4 subjects requested"),
+    ],
+    passes: [
+      ["04:02:11","err","Unrecognised — abort, DOM dumped (41 KB)","2s"],
+      ["04:02:09","nochange","Settling — looked again","2s"],
+    ],
+  },
+  stopped: {
+    label: "Stopped by you", vigil: "stopped", session: "live",
+    badge: { text:"", tone:"none", note:"Nothing armed — the badge is empty. A stopped Vigil leaves no mark on the toolbar." },
+    subjects: PLAN(), started: "07:00", ended: "07:36", pass: 655,
+    events: [
+      E("07:36","ambient","You stopped the Vigil","It will not resume. 2 subjects were still unresolved."),
+      E("07:00","ambient","Vigil started","4 subjects requested"),
+    ],
+    passes: TAIL_WATCH.slice(0, 4),
+  },
+};
+
+/* ---------------------------------------------------------------- helpers */
+const esc = (x) => String(x).replace(/[&<>]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;" }[c]));
+const unresolved = (s) => s.subjects.filter((x) => x.status !== "done").length;
+const CHIP = {
+  none:      ["idle","Not armed"],
+  armed:     ["armed","Armed"],
+  watching:  ["live","Watching"],
+  suspended: ["warn","Suspended"],
+  stall:     ["bad","Stalled"],
+  complete:  ["done","Complete"],
+  abort:     ["bad","Aborted"],
+  stopped:   ["idle","Stopped"],
+};
+function chip(s) {
+  const [tone, text] = CHIP[s.vigil];
+  const live = s.vigil === "watching" ? " live-dot" : "";
+  return `<span class="chip" data-tone="${tone}"><i class="dot${live}"></i>${text}</span>`;
+}
+function passRows(list, limit) {
+  return list.slice(0, limit || list.length).map(([t, o, txt, iv]) => {
+    const cls = o === "saved" ? "saved" : o === "gate" ? "gate" : o === "err" ? "err" : "";
+    return `<div class="pass" data-o="${cls}"><time>${t}</time><span class="txt">${esc(txt)}</span><span class="iv">${iv}</span></div>`;
+  }).join("");
+}
+/* collapse consecutive quiet Passes so a 200-long tail stays readable */
+function groupPasses(list) {
+  const out = []; let run = null;
+  for (const p of list) {
+    if (p[1] === "nochange") { (run ??= { n: 0, from: p[0], to: p[0], ivs: [] }); run.n++; run.to = p[0]; run.ivs.push(p[3]); }
+    else { if (run) { out.push({ run }); run = null; } out.push({ p }); }
+  }
+  if (run) out.push({ run });
+  return out;
+}
+const checklist = (live) => [
+  live ? ["Logged in to ArchersHub", "yes", "Checked just now — arming refuses without it"]
+       : ["Not logged in to ArchersHub", "no", "Arming is blocked until you fix this one"],
+  ["Mac kept awake, lid open", "you", "You do this one. A sleeping Mac watches nothing"],
+  ["Brave left running", "you", "A closed browser is a stopped Vigil"],
+];
+const checkHTML = (live) => checklist(live).map(([t, k, why]) => `
+  <li><span class="mark ${k === "yes" ? "" : k === "no" ? "bad" : "no"}">${k === "yes" ? "✓" : k === "no" ? "✗" : "○"}</span>
+    <span>${t}<br><span class="muted">${why}</span></span></li>`).join("");
+
+/* ================================================================ VARIANT A
+   State-led single column. No tabs, no navigation: the Vigil's state decides
+   what the popup is. Open it at 7am and the answer is the first thing you see. */
+function renderA(s) {
+  const hasVigil = !["none", "stopped"].includes(s.vigil); // a stopped Vigil is a plan again, with a report attached
+  const head = `<div class="hdr"><h1>Enlistment</h1>${chip(s)}</div>`;
+  return hasVigil ? head + aRun(s) : head + aPlan(s);
+}
+function aHero(line, why) {
+  return `<div class="a-hero"><p class="a-line">${line}</p>${why ? `<p class="a-why">${why}</p>` : ""}</div>`;
+}
+function aRoster(s) {
+  if (!s.subjects.length) return "";
+  return `<div class="sec"><div class="sec-h"><span>Subjects</span><b>${unresolved(s)} of ${s.subjects.length} left</b></div>
+    <div class="a-roster">${s.subjects.map((x) => `
+      <div class="a-subj">
+        <span class="a-code">${x.code}</span>
+        <span class="a-move">${x.held ? `${x.held} → <em>${x.wanted}</em>` : `— → <em>${x.wanted}</em>`}</span>
+        <span class="a-stat subj-status ${STATUS_CLASS[x.status]}">${STATUS_TEXT[x.status]}</span>
+      </div>`).join("")}</div></div>`;
+}
+function aPlan(s) {
+  const empty = !s.subjects.length;
+  const stopped = s.vigil === "stopped";
+  return (stopped
+      ? aHero("You stopped the Vigil at " + s.ended + ".", "It will not resume on its own. 2 subjects were unresolved when it stopped.")
+      : empty
+        ? aHero("Nothing to enlist yet.", "Pick a subject, then pick the one Section you actually want. The Vigil chases that Section and nothing else.")
+        : aHero(s.refused ? "Cannot arm — you are logged out." : "Ready to arm.",
+                s.refused ? "" : `Starts ${s.starts}. Nothing happens until then.`))
+    + (s.refused ? `<div class="sec"><div class="note" data-tone="bad"><b class="note-t">Arming needs a live session</b>
+        A Vigil cannot be armed against a logged-out student — it would wake at 07:00 with nothing to act on.
+        Log in to ArchersHub in any tab, then arm again.
+        <div style="margin-top:8px"><button class="btn btn-ghost" style="font-size:11.5px;padding:6px 10px">Open ArchersHub</button></div></div></div>` : "")
+    + (empty ? aPicker() : aRoster(s) + (stopped ? "" : aArm(s)))
+    + (empty || stopped ? "" : `<div class="a-foot"><button class="btn btn-ghost" style="flex:1">Edit subjects</button></div>`)
+    + (stopped ? `<div class="sec">${aLedger(s)}</div><div class="a-foot"><button class="btn btn-primary btn-block">Arm again</button></div>` : "");
+}
+function aPicker() {
+  const g = CATALOG.GERIZAL.sections.map((x) => `
+    <button class="a-sect" aria-pressed="${x.c === "Z25"}" data-full="${x.full ? 1 : 0}">
+      ${x.c}<small>${x.mine ? "yours" : x.full ? "full now" : x.left + " left"}</small></button>`).join("");
+  return `<div class="sec">
+    <div class="a-picker">
+      <input class="a-search" value="GERIZAL — Life and Works of Rizal" aria-label="Subject">
+      <div class="a-grid">${g}</div>
+      <p class="muted" style="font-size:11px">Z25 is full right now, so it is not offered. Pick it anyway — a full Section is
+        exactly what a Vigil is for. It reappears the moment a seat opens.</p>
+      <button class="btn btn-primary btn-block" style="margin-top:2px">Add GERIZAL Z25</button>
+    </div></div>`;
+}
+function aArm(s) {
+  return `<div class="sec">
+    <div class="sec-h"><span>Before you arm</span></div>
+    <ul class="a-check">${checkHTML(s.session === "live")}</ul>
+    <button class="btn btn-primary btn-lg btn-block" style="margin-top:12px" ${s.session === "live" ? "" : "disabled"}>${s.session === "live" ? `Arm for ${s.starts}` : "Arm — blocked, log in first"}</button>
+  </div>`;
+}
+function aRun(s) {
+  const heroes = {
+    armed:     [`Armed for ${s.starts}.`, `${s.countdown} from now. Nothing happens until then — you can close this.`],
+    watching:  [`Watching. ${unresolved(s)} subject${unresolved(s) === 1 ? "" : "s"} left.`, `Running ${s.elapsed} · Pass ${s.pass} · looking again every ${s.interval}`],
+    suspended: [`Stopped watching at ${s.since}.`, `You were logged out. It is still running and will pick up on its own — within 30 seconds of you logging back in.`],
+    stall:     [`Alive, but getting nowhere since ${s.stallSince}.`, `Ten minutes with no complete Pass. It is turning and nothing is coming out of it.`],
+    complete:  [`Everything is held.`, `Finished at ${s.ended}, ${s.elapsed} after it started. Your enlistment is at Pending.`],
+    abort:     [`Gave up at ${s.ended}.`, `It saw a page it could not classify and stopped rather than act on it. It will not resume.`],
+  }[s.vigil];
+  const act = {
+    suspended: `<div class="note" data-tone="warn"><b class="note-t">You have to log back in</b>Nothing else. It is probing every 30 seconds and will resume by itself.
+      <div style="margin-top:8px"><button class="btn btn-ghost" style="font-size:11.5px;padding:6px 10px">Open ArchersHub</button></div></div>`,
+    stall:     `<div class="note" data-tone="bad"><b class="note-t">The Save Gate is refusing every Pass</b>MSLABS2's row is not bound on the page, so the Course Selection it would post is short —
+      and a short list is a drop instruction. It refuses to save rather than risk your Slots.
+      <div style="margin-top:8px;display:flex;gap:6px"><button class="btn btn-ghost" style="font-size:11.5px;padding:6px 10px">Reload the tab</button><button class="btn btn-ghost" style="font-size:11.5px;padding:6px 10px">Open the tab</button></div></div>`,
+    complete:  `<div class="note" data-tone="good"><b class="note-t">Final Submit is yours to press</b>The Vigil reserves; it never commits. Nothing is locked until you press it yourself on STEP 3.
+      <div style="margin-top:8px"><button class="btn btn-ghost" style="font-size:11.5px;padding:6px 10px">Open the tab</button></div></div>`,
+    abort:     `<div class="note" data-tone="bad"><b class="note-t">The tab is still open, exactly as it was</b>That page is the evidence. Look at it before you close it, then arm again.
+      <div style="margin-top:8px;display:flex;gap:6px"><button class="btn btn-ghost" style="font-size:11.5px;padding:6px 10px">Open the tab</button><button class="btn btn-ghost" style="font-size:11.5px;padding:6px 10px">Save DOM dump</button></div></div>`,
+  }[s.vigil];
+  const lostNote = s.subjects.some((x) => x.status === "lost")
+    ? `<div class="note" data-tone="bad" style="margin-bottom:10px"><b class="note-t">MSLABS2 X22 is gone</b>The save at 07:29 came back capacity-full and X22 was not held afterwards.
+       It is already chasing X22 again — faster than you can. Take X23 by hand if you want a backup.</div>` : "";
+  const stoppable = s.vigil === "watching" || s.vigil === "suspended" || s.vigil === "stall" || s.vigil === "armed";
+  return aHero(heroes[0], heroes[1])
+    + (act || lostNote ? `<div class="sec">${lostNote}${act || ""}</div>` : "")
+    + aRoster(s)
+    + `<div class="sec">${aLedger(s)}
+        <details class="a-more"><summary>Last ${s.passes.length} of ${s.pass || 0} Passes</summary>
+          <div style="padding-bottom:8px">${passRows(s.passes)}</div></details></div>`
+    + (stoppable ? `<div class="a-foot"><button class="btn btn-danger" style="flex:1" data-stop>Stop the Vigil</button></div>` : "");
+}
+function aLedger(s) {
+  if (!s.events.length) return "";
+  return `<details class="a-more" open><summary>What happened</summary>
+    <div style="padding-bottom:8px">${s.events.map((e) => `
+      <div class="ev" data-tier="${e.tier}"><time>${e.t}</time><div><span class="t">${esc(e.title)}</span><br><span class="c">${esc(e.cause)}</span></div></div>`).join("")}</div></details>`;
+}
+
+/* ================================================================ VARIANT B
+   Three tabs — Plan, Run, Report. Everything is always reachable, and the
+   Report is a real diagnostic surface rather than a section at the bottom.
+   Opens on the tab the current state makes most relevant. */
+let bTab = null, bFilter = "all";
+function bDefaultTab(s) {
+  if (s.vigil === "none") return "plan";
+  if (s.vigil === "watching" || s.vigil === "armed") return "run";
+  return "report";
+}
+function renderB(s) {
+  const tab = bTab || bDefaultTab(s);
+  const pip = { alert: "var(--red)", notice: "var(--amber)" }[s.events[0]?.tier];
+  return `<div class="hdr"><h1>Enlistment</h1>${chip(s)}</div>
+    <div class="b-tabs" role="tablist">
+      ${["plan", "run", "report"].map((t) => `<button class="b-tab" role="tab" data-tab="${t}" aria-selected="${t === tab}">
+        ${t[0].toUpperCase() + t.slice(1)}${t === "report" && pip ? `<i class="pip" style="background:${pip}"></i>` : ""}</button>`).join("")}
+    </div>
+    ${tab === "plan" ? bPlan(s) : tab === "run" ? bRun(s) : bReport(s)}`;
+}
+function bPlan(s) {
+  if (!s.subjects.length) return `<div class="sec"><p class="empty">No subjects yet.<br>
+    <span style="font-size:11px">Add one below — subject first, then the single Section you want.</span></p>
+    ${bAddRow()}</div>`;
+  const rows = s.subjects.map((x) => {
+    const secs = CATALOG[x.code].sections;
+    const wantedFull = secs.find((o) => o.c === x.wanted)?.full;
+    return `<tr>
+      <td><select class="b-sel" aria-label="Subject"><option>${x.code}</option></select></td>
+      <td style="width:96px"><select class="b-sel" aria-label="Wanted Section">
+        ${secs.map((o) => `<option ${o.c === x.wanted ? "selected" : ""}>${o.c}</option>`).join("")}</select></td>
+      <td class="b-check muted" style="width:74px">${wantedFull ? `<span style="color:var(--amber)">full now</span>` :
+        secs.find((o) => o.c === x.wanted)?.mine ? `<span style="color:var(--accent)">held</span>` : `${secs.find((o) => o.c === x.wanted)?.left} left`}</td>
+      <td style="width:18px"><button class="b-x" aria-label="Remove ${x.code}">×</button></td></tr>`;
+  }).join("");
+  return `<div class="sec">
+    <table class="b-plan"><thead><tr><th>Subject</th><th>Wanted Section</th><th>Now</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+    ${bAddRow()}
+    <p class="muted" style="font-size:11px;margin-top:10px">Both columns are dropdowns off ArchersHub's own catalogue, so a Section
+      you cannot spell is a Section you cannot enter. <b style="color:var(--ink-2);font-weight:500">Full now</b> is not an error — it is the normal
+      reason a Vigil exists.</p>
+    ${s.refused ? `<div class="note" data-tone="bad" style="margin-top:12px"><b class="note-t">Cannot arm — you are logged out</b>
+      Arming checks the session first, so a Vigil is never scheduled against a login it does not have.</div>` : ""}
+    <div class="sec-h" style="margin-top:6px"><span>Start</span></div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <input type="datetime-local" value="2026-08-26T07:00" style="flex:1;background:var(--surface);border:1px solid var(--line);color:var(--ink);border-radius:var(--r-sm);padding:6px 8px;font:12px var(--mono)">
+    </div>
+    <button class="btn btn-primary btn-lg btn-block" style="margin-top:10px" ${s.vigil !== "none" || s.session !== "live" ? "disabled" : ""}>
+      ${s.vigil !== "none" ? "A Vigil is already armed" : s.session !== "live" ? "Arm — blocked, log in first" : "Arm"}</button>
+    <details class="a-more" style="border-top:1px solid var(--line-soft);margin-top:10px"><summary>Night-before checklist</summary>
+      <ul class="a-check" style="padding-bottom:10px">${checkHTML(s.session === "live")}</ul>
+    </details></div>`;
+}
+function bAddRow() {
+  return `<div style="display:flex;gap:6px;margin-top:10px">
+    <select class="b-sel" style="flex:1"><option>Add a subject…</option>${Object.keys(CATALOG).map((c) => `<option>${c}</option>`).join("")}</select>
+    <button class="btn btn-ghost" style="padding:6px 11px;font-size:11.5px">Add</button></div>`;
+}
+function bRun(s) {
+  if (s.vigil === "none") return `<div class="sec"><p class="empty">Nothing is running.<br>
+    <span style="font-size:11px">Arm a Vigil on the Plan tab.</span></p></div>`;
+  const heads = {
+    armed:     [`Armed for ${s.starts}`, `${s.countdown} away`],
+    watching:  [`Watching`, `${unresolved(s)} of ${s.subjects.length} subjects left`],
+    suspended: [`Suspended since ${s.since}`, `Logged out — probing every 30s, resumes on its own`],
+    stall:     [`Stalled since ${s.stallSince}`, `10 minutes with no complete Pass`],
+    complete:  [`Complete at ${s.ended}`, `Enlistment is at Pending — Final Submit is yours`],
+    abort:     [`Aborted at ${s.ended}`, `Unrecognised page — it will not resume`],
+    stopped:   [`You stopped it at ${s.ended}`, `It will not resume`],
+  }[s.vigil];
+  return `<div class="sec">
+    <div style="padding:12px 0 10px"><p style="font-size:14px;font-weight:600;letter-spacing:-0.01em">${heads[0]}</p>
+      <p class="muted" style="font-size:11.5px;margin-top:2px">${heads[1]}</p></div>
+    <dl class="b-stats">
+      <div class="b-stat"><dt>Passes</dt><dd>${s.pass ?? "—"}</dd></div>
+      <div class="b-stat"><dt>Interval</dt><dd>${s.interval ?? "—"}</dd></div>
+      <div class="b-stat"><dt>Running</dt><dd>${s.elapsed ?? "—"}</dd></div>
+    </dl>
+    <div class="sec-h" style="margin-top:4px"><span>Subjects</span></div>
+    <table class="b-plan"><tbody>${s.subjects.map((x) => `<tr>
+      <td style="font-weight:600">${x.code}</td>
+      <td class="k muted">${x.held || "—"} → <span style="color:var(--ink-2)">${x.wanted}</span></td>
+      <td style="text-align:right"><span class="subj-status ${STATUS_CLASS[x.status]}">${STATUS_TEXT[x.status]}</span></td></tr>`).join("")}</tbody></table>
+    ${["watching", "armed", "suspended", "stall"].includes(s.vigil)
+      ? `<div style="display:flex;gap:6px;margin-top:14px"><button class="btn btn-ghost" style="flex:1">Open the tab</button>
+         <button class="btn btn-danger" data-stop>Stop</button></div>` : ""}
+    </div>`;
+}
+function bReport(s) {
+  if (!s.events.length) return `<div class="sec"><p class="empty">No Vigil has run yet.</p></div>`;
+  const shown = s.events.filter((e) => bFilter === "all" || (bFilter === "alerts" ? e.tier !== "ambient" : true));
+  return `<div class="sec">
+    <div class="sec-h"><span>Everything that happened</span><b>${s.started ? "since " + s.started : ""}</b></div>
+    <div class="b-filters">
+      ${[["all", "All"], ["alerts", "Alerts & notices"]].map(([k, l]) =>
+        `<button class="b-filter" data-filter="${k}" aria-pressed="${bFilter === k}">${l}</button>`).join("")}
+    </div>
+    ${shown.map((e) => `<div class="ev" data-tier="${e.tier}"><time>${e.t}</time>
+      <div><span class="t">${esc(e.title)}</span><br><span class="c">${esc(e.cause)}</span></div></div>`).join("")}
+    <div class="sec-h" style="margin-top:12px"><span>Passes</span><b>last ${s.passes.length} of ${s.pass || 0}</b></div>
+    ${s.passes.length ? passRows(s.passes) : `<p class="empty">None yet.</p>`}
+    <p class="muted" style="font-size:10.5px;margin-top:10px">The tail keeps the last 200. Everything older is gone —
+      a Vigil runs thousands of Passes a night.</p></div>`;
+}
+
+/* ================================================================ VARIANT C
+   The Run Report IS the popup: one reverse-chronological feed, the way you'd
+   read a CI run. Quiet Passes collapse into run-length rows so 200 of them fit.
+   Configuration is a pushed screen, not a tab you can end up stranded on. */
+let cScreen = false;
+function renderC(s) {
+  if (cScreen || (s.vigil === "none" && !s.subjects.length)) return cPlanScreen(s);
+  const stoppable = ["watching", "armed", "suspended", "stall"].includes(s.vigil);
+  return `<div class="c-strip">
+      <div class="c-strip-top">${chip(s)}<span class="muted" style="font-size:11px;flex:1">${cSummary(s)}</span>
+        <button class="btn btn-ghost" style="padding:5px 9px;font-size:11px" data-screen>Plan</button>
+        ${stoppable ? `<button class="btn btn-danger" style="padding:5px 9px;font-size:11px" data-stop>Stop</button>` : ""}</div>
+      <div class="c-pills">${s.subjects.map((x) => `<span class="c-pill" data-s="${x.status}">${x.code}
+        <small>${x.held || "—"} → ${x.wanted}</small></span>`).join("")}</div>
+      ${cAction(s)}
+    </div>
+    <div class="c-feed">${cFeed(s)}</div>`;
+}
+const C_ACTIONS = {
+  suspended: ["You have to log back in. Nothing else.", "Open ArchersHub", "warn"],
+  stall:     ["The Save Gate is refusing — MSLABS2's row is not bound.", "Reload the tab", "bad"],
+  complete:  ["Final Submit is yours to press. Nothing is locked yet.", "Open the tab", "good"],
+  abort:     ["The tab is left open as evidence. Look before closing it.", "Open the tab", "bad"],
+  lost:      ["MSLABS2 X22 is gone. It is already chasing it again.", "Open the tab", "bad"],
+};
+function cAction(s) {
+  const key = s.subjects.some((x) => x.status === "lost") ? "lost" : s.vigil;
+  const a = C_ACTIONS[key];
+  if (!a) return "";
+  const tone = { warn: "var(--amber)", bad: "var(--red)", good: "var(--accent)" }[a[2]];
+  return `<div style="display:flex;align-items:center;gap:8px;padding:0 12px 10px">
+    <span style="font-size:11.5px;color:${tone};flex:1">${a[0]}</span>
+    <button class="btn btn-ghost" style="padding:5px 9px;font-size:11px;flex:none">${a[1]}</button></div>`;
+}
+function cSummary(s) {
+  return {
+    armed:     `starts ${s.starts}`,
+    watching:  `Pass ${s.pass} · every ${s.interval} · ${unresolved(s)} left`,
+    suspended: `probing every 30s since ${s.since}`,
+    stall:     `nothing since ${s.stallSince}`,
+    complete:  `${s.pass} Passes · ${s.elapsed}`,
+    abort:     `stopped at ${s.ended}`,
+    stopped:   `stopped at ${s.ended}`,
+    none:      `not armed`,
+  }[s.vigil];
+}
+function cFeed(s) {
+  if (!s.events.length && !s.passes.length) return `<p class="empty">Nothing has happened yet.</p>`;
+  const evs = s.events.map((e) => `<div class="c-item" data-tier="${e.tier}"><time>${e.t}</time>
+      <div><p class="c-t">${esc(e.title)}</p><p class="c-c">${esc(e.cause)}</p></div></div>`);
+  const ps = groupPasses(s.passes).map((g) => {
+    if (g.run && g.run.n === 1) g = { p: s.passes.find((x) => x[0] === g.run.to) };
+    if (g.run) {
+      const ivs = g.run.ivs;
+      return `<div class="c-item" data-tier="quiet"><time>${g.run.to.slice(0, 5)}</time>
+        <div><p class="c-t">${g.run.n} Pass${g.run.n === 1 ? "" : "es"}, nothing changed
+        <span class="k muted">· ${ivs[ivs.length - 1]} → ${ivs[0]}</span><button class="c-open">open</button></p></div></div>`;
+    }
+    const [t, o, txt] = g.p;
+    const tier = o === "err" || o === "gate" ? "alert" : o === "saved" ? "ambient" : "quiet";
+    return `<div class="c-item" data-tier="${tier}"><time>${t.slice(0, 5)}</time><div><p class="c-t">${esc(txt)}</p></div></div>`;
+  });
+  return evs.join("") + (ps.length ? `<div class="sec-h" style="padding:14px 0 2px"><span>Passes</span><b>last ${s.passes.length} of ${s.pass || 0}</b></div>` + ps.join("") : "");
+}
+function cPlanScreen(s) {
+  const lines = s.subjects.length ? s.subjects.map((x) => `${x.code} ${x.wanted}`).join("\n") : "GERIZAL Z25\nCSC615M S15\nCSC612M S11\nMSLABS2 X22";
+  const parsed = (s.subjects.length ? s.subjects : PLAN()).map((x) => {
+    const sec = CATALOG[x.code].sections.find((o) => o.c === x.wanted);
+    const ok = !!sec;
+    return `<div class="c-res"><span class="g ${ok ? "ok" : "no"}">${ok ? "✓" : "!"}</span>
+      <code>${x.code} ${x.wanted}</code>
+      <span class="muted" style="font-size:10.5px">${!sec ? "no such Section" : sec.mine ? "you hold it" : sec.full ? "full right now" : sec.left + " left"}</span></div>`;
+  }).join("");
+  return `${s.vigil !== "none" || s.subjects.length ? `<button class="c-back" data-screen>‹ Back</button>` : `<div class="hdr"><h1>Enlistment</h1>${chip(s)}</div>`}
+    <div class="sec">
+      <p class="muted" style="font-size:11.5px;margin-bottom:8px">One line per subject: the code, then the one Section you want.
+        Paste it straight off your flowchart.</p>
+      <textarea class="c-paste" spellcheck="false">${lines}</textarea>
+      <div class="sec-h"><span>Checked against ArchersHub</span><b>just now</b></div>
+      ${parsed}
+      <p class="muted" style="font-size:10.5px;margin-top:8px">Checked against the live catalogue, so a typo is caught tonight
+        rather than at 07:00. Full is fine — that is the whole point.</p>
+      <div class="sec-h" style="margin-top:8px"><span>Start</span></div>
+      <input type="datetime-local" value="2026-08-26T07:00" style="width:100%;background:var(--surface);border:1px solid var(--line);color:var(--ink);border-radius:var(--r-sm);padding:7px 9px;font:12px var(--mono)">
+      ${s.refused ? `<div class="note" data-tone="bad" style="margin-top:10px"><b class="note-t">You are logged out</b>
+        Arming checks the session first and refuses. Log in, then arm.</div>` : ""}
+      <ul class="a-check" style="margin-top:12px">${checkHTML(s.session === "live")}</ul>
+      <button class="btn btn-primary btn-lg btn-block" style="margin-top:12px" ${s.refused ? "disabled" : ""}>${s.refused ? "Arm — blocked, log in first" : "Arm for Wed 26 Aug, 07:00"}</button>
+    </div>`;
+}
+
+/* ------------------------------------------------------------ the switcher */
+const VARIANTS = {
+  A: { name: "State-led column", width: 400, render: renderA },
+  B: { name: "Plan · Run · Report", width: 462, render: renderB },
+  C: { name: "Ledger spine", width: 380, render: renderC },
+};
+const KEYS = Object.keys(VARIANTS);
+const params = new URLSearchParams(location.search);
+let variant = KEYS.includes(params.get("variant")) ? params.get("variant") : "A";
+let scenario = SCENARIOS[params.get("scenario")] ? params.get("scenario") : "watching";
+
+const popupEl = document.getElementById("popup");
+const badgeEl = document.getElementById("badge");
+const noteEl = document.getElementById("badgeNote");
+const labelEl = document.getElementById("vlabel");
+const selEl = document.getElementById("scenario");
+
+selEl.innerHTML = Object.entries(SCENARIOS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join("");
+
+function render() {
+  const v = VARIANTS[variant], s = SCENARIOS[scenario];
+  popupEl.style.width = v.width + "px";
+  popupEl.className = "popup v" + variant;
+  popupEl.innerHTML = v.render(s);
+  badgeEl.textContent = s.badge.text;
+  badgeEl.dataset.tone = s.badge.tone;
+  noteEl.textContent = s.badge.note;
+  labelEl.innerHTML = `<b>${variant}</b> <span>· ${v.name} · ${v.width}px</span>`;
+  selEl.value = scenario;
+  const u = new URLSearchParams({ variant, scenario });
+  history.replaceState(null, "", "?" + u);
+
+  popupEl.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { bTab = b.dataset.tab; render(); });
+  popupEl.querySelectorAll("[data-filter]").forEach((b) => b.onclick = () => { bFilter = b.dataset.filter; render(); });
+  popupEl.querySelectorAll("[data-screen]").forEach((b) => b.onclick = () => { cScreen = !cScreen; render(); });
+  popupEl.querySelectorAll("[data-stop]").forEach((b) => b.onclick = () => {
+    if (b.dataset.armed) { scenario = "stopped"; render(); return; }
+    b.dataset.armed = "1"; b.textContent = "Stop — it will not resume. Sure?";
+  });
+}
+function go(step) { variant = KEYS[(KEYS.indexOf(variant) + step + KEYS.length) % KEYS.length]; bTab = null; cScreen = false; render(); }
+document.getElementById("prev").onclick = () => go(-1);
+document.getElementById("next").onclick = () => go(1);
+selEl.onchange = () => { scenario = selEl.value; bTab = null; cScreen = false; render(); };
+document.addEventListener("keydown", (e) => {
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
+  if (e.key === "ArrowLeft") go(-1);
+  if (e.key === "ArrowRight") go(1);
+});
+render();
+</script>
+</body>
+</html>
