@@ -766,9 +766,9 @@ function bPlan(s) {
   return `<div class="sec">
     <table class="b-plan"><thead><tr><th>Subject</th><th>Wanted Section</th><th>Now</th><th></th></tr></thead><tbody>${rows}</tbody></table>
     ${bAddRow()}
-    <p class="muted" style="font-size:11px;margin-top:10px">Both columns are dropdowns off ArchersHub's own catalogue, so a Section
-      you cannot spell is a Section you cannot enter. <b style="color:var(--ink-2);font-weight:500">Full now</b> is not an error — it is the normal
-      reason a Vigil exists.</p>
+    <p class="muted" style="font-size:11px;margin-top:10px">Both columns come from ArchersHub's own catalogue — the 16 courses and 102
+      Sections the read path already returns — so a Section you cannot spell is a Section you cannot enter.
+      <b style="color:var(--ink-2);font-weight:500">Full now</b> is not an error; it is the normal reason a Vigil exists.</p>
     ${s.refused ? `<div class="note" data-tone="bad" style="margin-top:12px"><b class="note-t">Cannot arm — you are logged out</b>
       Arming checks the session first, so a Vigil is never scheduled against a login it does not have.</div>` : ""}
     ${startControl(s)}
@@ -824,10 +824,12 @@ function bReport(s) {
     </div>
     ${shown.map((e) => `<div class="ev" data-tier="${e.tier}"><time>${e.t}</time>
       <div><span class="t">${esc(e.title)}</span><br><span class="c">${esc(e.cause)}</span></div></div>`).join("")}
-    <div class="sec-h" style="margin-top:12px"><span>Passes</span><b>last ${s.passes.length} of ${s.pass || 0}</b></div>
-    ${s.passes.length ? passRows(s.passes) : `<p class="empty">None yet.</p>`}
-    <p class="muted" style="font-size:10.5px;margin-top:10px">The tail keeps the last 200. Everything older is gone —
-      a Vigil runs thousands of Passes a night.</p></div>`;
+    <div class="sec-h" style="margin-top:14px"><span>Passes</span><b>${s.pass || 0} so far</b></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <p class="muted" style="font-size:11px;flex:1">The last 200 are kept for diagnosing a Stall. They are not
+        worth reading in a 460px popup — take them out to something that can search.</p>
+      <button class="btn btn-ghost" style="flex:none;padding:7px 10px;font-size:11.5px" ${s.pass ? "" : "disabled"}>Export</button>
+    </div></div>`;
 }
 
 /* ================================================================ VARIANT C
