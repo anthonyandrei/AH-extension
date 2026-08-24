@@ -60,6 +60,11 @@ dropdown on a saved row swaps atomically or releases the Held Section first. The
 invariant is non-negotiable: never give up a Slot without the other Slot assured. That
 condition lifts on its own once the atomicity question is answered.
 
+> **Superseded by [ADR-0005](0005-the-switch-is-the-students-own-procedure.md).** The condition
+> has lifted, though not by the route anticipated here. The atomicity question was not answered;
+> it was ruled ArchersHub's to answer. The Pass now performs the swap the same way a student
+> would, and the Slot is protected by the **Save Gate** instead.
+
 **Nothing the run writes down is ever read back as truth.** Reconciliation reads what is held,
 every Pass, from ArchersHub. Run logs and reports exist to tell the student what happened; they
 are never an input to a decision. This is ADR-0001's stateless rule surviving contact with a

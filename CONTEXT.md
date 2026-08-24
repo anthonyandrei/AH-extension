@@ -17,6 +17,12 @@ A seat in one Section of one Course Offering. Finite and contested — students 
 them the moment the Enlistment Activity opens.
 _Avoid_: seat, place
 
+**Course Selection**:
+The complete set of subjects and Sections the student is declaring for the term. It is declared
+whole, never amended in parts: saving it states the entire set, so a subject left out of it is a
+subject given up.
+_Avoid_: the course list (that is what the page renders), basket, cart
+
 **Saved Slot**:
 A Slot reserved for the student by saving their Course Selection. Reversible, and the
 only outcome the automator pursues.
@@ -82,6 +88,13 @@ One cycle of the run loop: Classify the Page State, do Reconciliation for every 
 subject, then save the Course Selection once. The unit of retry — the page saves the whole
 Course Selection together, so a single subject can never be retried on its own.
 _Avoid_: attempt, iteration, cycle
+
+**Save Gate**:
+The check a Pass must pass before it is allowed to save: every Slot the student holds is present
+and accounted for in the Course Selection about to be declared. A Pass that cannot satisfy it does
+not save at all. It exists because the Course Selection is declared whole — an incomplete one
+gives up Slots that nobody meant to give up.
+_Avoid_: validation (ArchersHub runs its own, and this is not it)
 
 **Vigil**:
 A run with no deadline and no attempt cap. It continues until every subject's Held Section is
