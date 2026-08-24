@@ -25,6 +25,12 @@ _Avoid_: enlisted course, booked slot, registered course
 **Held Section**:
 The Section a Saved Slot is in. A subject has at most one.
 
+**Wanted Section**:
+The Section the student asked for in a subject. Distinct from the Held Section, which is
+what they hold right now. The run is finished with a subject only when the two are the same,
+so a backup Section leaves that subject unresolved.
+_Avoid_: preferred section, target section
+
 **Final Submit**:
 The irreversible act that commits every Saved Slot and locks all further edits. Performed
 by the student alone; the automator never performs it under any circumstance.
@@ -68,3 +74,17 @@ is **read over HTTP** (`GetAllCourseSectionData`, `GetCourseWiseSectionData`); t
 Selection is **written through the DOM** by clicking `#btnEnlistment`. The save endpoint exists
 and is deliberately never called (ADR-0002).
 _Avoid_: scraping (reading is a direct JSON call, not parsing rendered HTML)
+
+### Running
+
+**Pass**:
+One cycle of the run loop: Classify the Page State, do Reconciliation for every requested
+subject, then save the Course Selection once. The unit of retry — the page saves the whole
+Course Selection together, so a single subject can never be retried on its own.
+_Avoid_: attempt, iteration, cycle
+
+**Vigil**:
+A run with no deadline and no attempt cap. It continues until every subject's Held Section is
+its Wanted Section, or until the student stops it. A full Section is hidden rather than shown
+as full, so the only way to learn that a Slot opened is to keep looking.
+_Avoid_: retry loop, polling loop
