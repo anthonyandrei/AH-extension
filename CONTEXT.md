@@ -59,3 +59,11 @@ expected to land here, having never been observed.
 Comparing what the student asked for against what they currently hold, per subject, to
 decide what to do about that subject. Distinct from Page State: Page State answers
 *where am I*, Reconciliation answers *what should happen here*.
+
+### Driving
+
+**Driving Surface**:
+The interface the automator acts through. It is the **DOM** — the page's own controls, read
+and clicked as a browser would. ArchersHub's HTTP endpoints answer directly and were
+considered, but are never called (ADR-0002).
+_Avoid_: backend, API layer (the endpoints exist; we simply do not drive through them)
