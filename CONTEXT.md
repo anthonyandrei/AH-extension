@@ -88,3 +88,23 @@ A run with no deadline and no attempt cap. It continues until every subject's He
 its Wanted Section, or until the student stops it. A full Section is hidden rather than shown
 as full, so the only way to learn that a Slot opened is to keep looking.
 _Avoid_: retry loop, polling loop
+
+### Liveness
+
+**Armed**:
+A Vigil that has been scheduled but has not started watching yet. Arming requires a live
+session — a Vigil cannot be armed against a logged-out student, because the one precondition
+only they can satisfy is being logged in.
+_Avoid_: scheduled, pending (Pending means the enlistment status, never the run)
+
+**Suspended**:
+A Vigil that has stopped watching because the session is gone, and will resume on its own the
+moment it returns. Distinct from a Vigil the student stopped, which does not resume, and from
+an abort, which is what an Unrecognised page causes.
+
+**Owned Tab**:
+The enlistment tab the automator opens and maintains for itself, as opposed to any tab the
+student has open. It is the surface the Course Selection is written through, and it is
+disposable: it holds no authentication of its own, since the session lives in the browser
+profile and is shared by every tab.
+_Avoid_: the enlistment tab (ambiguous — say whose)
