@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "ArchersHub Enlistment Automator",
+  "version": "1.0.0",
+  "description": "Automate course enlistment on ArchersHub with scheduled execution and subject/section management.",
+  
+  "permissions": [
+    "storage",
+    "alarms",
+    "tabs"
+  ],
+  
+  "host_permissions": [
+    "https://archershub.dlsu.edu.ph/*"
+  ],
+  
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "ArchersHub Enlistment Automator"
+  },
+  
+  "background": {
+    "service_worker": "background/background.js"
+  },
+  
+  "content_scripts": [
+    {
+      "matches": ["https://archershub.dlsu.edu.ph/Enlistment/*"],
+      "js": ["content/content.js"],
+      "run_at": "document_end"
+    }
+  ]
+}

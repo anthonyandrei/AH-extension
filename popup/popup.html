@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ArchersHub Enlistment Automator</title>
+    <link rel="stylesheet" href="../styles/popup.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Enlistment Automator</h1>
+        
+        <!-- Status Section -->
+        <div class="status-section">
+            <div id="status" class="status not-running">
+                <span id="statusText">Not Running</span>
+            </div>
+        </div>
+
+        <!-- Add Subject Section -->
+        <div class="add-subject-section">
+            <h2>Add Subject & Section</h2>
+            <div class="form-group">
+                <label for="subjectInput">Subject Code:</label>
+                <input 
+                    type="text" 
+                    id="subjectInput" 
+                    placeholder="e.g., GEUSELF" 
+                    maxlength="20"
+                >
+            </div>
+            <div class="form-group">
+                <label for="sectionInput">Section:</label>
+                <input 
+                    type="text" 
+                    id="sectionInput" 
+                    placeholder="e.g., Y01" 
+                    maxlength="20"
+                >
+            </div>
+            <button id="addBtn" class="btn btn-primary">Add Subject</button>
+            <div id="addError" class="error-message"></div>
+        </div>
+
+        <!-- Subjects List Section -->
+        <div class="subjects-list-section">
+            <h2>Subjects to Enlist</h2>
+            <div id="subjectsList" class="subjects-list">
+                <p class="empty-message">No subjects added yet</p>
+            </div>
+        </div>
+
+        <!-- Scheduling Section -->
+        <div class="scheduling-section">
+            <h2>Schedule Execution</h2>
+            
+            <div class="schedule-options">
+                <div class="radio-group">
+                    <label class="radio-label">
+                        <input type="radio" name="scheduleType" value="immediate" checked>
+                        Run Immediately
+                    </label>
+                </div>
+                
+                <div class="radio-group">
+                    <label class="radio-label">
+                        <input type="radio" name="scheduleType" value="scheduled">
+                        Schedule for Date & Time
+                    </label>
+                </div>
+            </div>
+
+            <div id="scheduledTimeContainer" class="hidden">
+                <div class="form-group">
+                    <label for="executionDate">Date:</label>
+                    <input type="date" id="executionDate">
+                </div>
+                <div class="form-group">
+                    <label for="executionTime">Time:</label>
+                    <input type="time" id="executionTime">
+                </div>
+                <div id="scheduleError" class="error-message"></div>
+            </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="action-buttons">
+            <button id="runBtn" class="btn btn-success">Run Now</button>
+            <button id="scheduleBtn" class="btn btn-info hidden">Save Schedule</button>
+            <button id="clearScheduleBtn" class="btn btn-secondary hidden">Clear Schedule</button>
+        </div>
+
+        <!-- Log Section -->
+        <div class="log-section">
+            <h2>Execution Log</h2>
+            <div id="executionLog" class="execution-log">
+                <p class="log-entry info">Ready to enlist. Please log in first on ArchersHub.</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
