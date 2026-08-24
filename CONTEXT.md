@@ -63,7 +63,8 @@ decide what to do about that subject. Distinct from Page State: Page State answe
 ### Driving
 
 **Driving Surface**:
-The interface the automator acts through. It is the **DOM** — the page's own controls, read
-and clicked as a browser would. ArchersHub's HTTP endpoints answer directly and were
-considered, but are never called (ADR-0002).
-_Avoid_: backend, API layer (the endpoints exist; we simply do not drive through them)
+The interface the automator acts through, chosen separately for reading and writing. Slot data
+is **read over HTTP** (`GetAllCourseSectionData`, `GetCourseWiseSectionData`); the Course
+Selection is **written through the DOM** by clicking `#btnEnlistment`. The save endpoint exists
+and is deliberately never called (ADR-0002).
+_Avoid_: scraping (reading is a direct JSON call, not parsing rendered HTML)
