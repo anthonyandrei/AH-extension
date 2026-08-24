@@ -37,6 +37,12 @@ what they hold right now. The run is finished with a subject only when the two a
 so a backup Section leaves that subject unresolved.
 _Avoid_: preferred section, target section
 
+**Plan**:
+The set of subjects the student is asking for, each with one Wanted Section, plus when the run
+starts. What arming turns into a Vigil. Distinct from the Course Selection, which is what gets
+declared to ArchersHub and includes Slots the student holds but never asked for.
+_Avoid_: config, settings, schedule (the start time is one field of a Plan, not the Plan)
+
 **Final Submit**:
 The irreversible act that commits every Saved Slot and locks all further edits. Performed
 by the student alone; the automator never performs it under any circumstance.
@@ -107,13 +113,20 @@ _Avoid_: retry loop, polling loop
 **Armed**:
 A Vigil that has been scheduled but has not started watching yet. Arming requires a live
 session — a Vigil cannot be armed against a logged-out student, because the one precondition
-only they can satisfy is being logged in.
+only they can satisfy is being logged in. A Vigil started **now** never passes through this
+state: there is no gap between scheduling it and it watching.
 _Avoid_: scheduled, pending (Pending means the enlistment status, never the run)
 
 **Suspended**:
 A Vigil that has stopped watching because the session is gone, and will resume on its own the
 moment it returns. Distinct from a Vigil the student stopped, which does not resume, and from
 an abort, which is what an Unrecognised page causes.
+
+**Stopped**:
+A Vigil the student ended by hand. It leaves the Plan intact and the badge empty, and it never
+resumes — which is the whole distinction from Suspended, where the Vigil is still running and
+waiting for the session to come back.
+_Avoid_: cancelled, aborted (an abort is what an Unrecognised page causes, not a person)
 
 **Owned Tab**:
 The enlistment tab the automator opens and maintains for itself, as opposed to any tab the
@@ -140,8 +153,9 @@ _Avoid_: hang, stuck, timeout
 
 **Run Report**:
 The persisted record of a Vigil, written for the student and read by nobody else. It holds
-every notable event with its time and cause, plus a rolling tail of recent Passes. It is never
-an input to the run — Reconciliation reads the page, every Pass — so no decision can ever come
-to depend on it.
+every notable event with its time and cause, plus a rolling tail of recent Passes. The popup
+renders the events; the tail is kept for diagnosis and leaves by export, because two hundred
+Passes are searched rather than read. It is never an input to the run — Reconciliation reads
+the page, every Pass — so no decision can ever come to depend on it.
 _Avoid_: log (the popup log is a different thing and does not survive the popup closing),
 history, audit trail
