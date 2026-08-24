@@ -121,3 +121,27 @@ student has open. It is the surface the Course Selection is written through, and
 disposable: it holds no authentication of its own, since the session lives in the browser
 profile and is shared by every tab.
 _Avoid_: the enlistment tab (ambiguous — say whose)
+
+### Reporting
+
+**Alert**:
+An event the automator raises because the Vigil cannot proceed and only the student can
+unstick it: a Suspended session, an abort, or a Stall. Distinct from an event merely worth
+knowing — an Alert is a claim on the student's attention, so what qualifies is deliberately
+short.
+_Avoid_: warning, error (an error is a thing that happened; an Alert is a decision to interrupt)
+
+**Stall**:
+A Vigil that is alive but achieving nothing: ten minutes have passed with no complete Pass.
+A Pass is complete when it classifies the page, reads what is held, and either satisfies the
+Save Gate and saves or correctly finds nothing to do. Distinct from a Vigil that is watching
+correctly and finding nothing, which is the normal state of a Vigil and never an Alert.
+_Avoid_: hang, stuck, timeout
+
+**Run Report**:
+The persisted record of a Vigil, written for the student and read by nobody else. It holds
+every notable event with its time and cause, plus a rolling tail of recent Passes. It is never
+an input to the run — Reconciliation reads the page, every Pass — so no decision can ever come
+to depend on it.
+_Avoid_: log (the popup log is a different thing and does not survive the popup closing),
+history, audit trail
