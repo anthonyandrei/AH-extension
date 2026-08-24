@@ -143,6 +143,24 @@ body {
 .btn-block { width: 100%; }
 .btn-lg { padding: 11px 14px; font-size: 13px; }
 
+.seg {
+  display: flex; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-md); padding: 2px; gap: 2px;
+}
+.seg button {
+  appearance: none; background: none; border: 0; cursor: pointer; flex: 1;
+  color: var(--ink-3); font: 600 11.5px/1 inherit; padding: 7px 11px; border-radius: 5px;
+  transition: background 150ms var(--ease), color 150ms var(--ease);
+}
+.seg button:hover { color: var(--ink-2); }
+.seg button[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); }
+.seg button:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.dt {
+  width: 100%; background: var(--surface); border: 1px solid var(--line); color: var(--ink);
+  border-radius: var(--r-sm); padding: 7px 9px; font: 12px var(--mono);
+}
+.dt:focus { outline: none; border-color: var(--accent); }
+
 .note {
   border-radius: var(--r-md); padding: 9px 11px; font-size: 11.5px; line-height: 1.45;
   border: 1px solid var(--line-soft); background: var(--surface); color: var(--ink-2);
@@ -575,6 +593,30 @@ function groupPasses(list) {
   if (run) out.push({ run });
   return out;
 }
+/* Two ways to start, and they are equally normal: a scheduled arm for the
+   moment enlistment opens, and starting now to chase a Section that is full
+   today. "Now" means there is no Armed phase at all — it goes straight to
+   Watching, and the badge skips grey for the count. */
+let startMode = "scheduled";
+const START_AT = "Wed 26 Aug, 07:00";
+function startControl(s) {
+  const now = startMode === "now";
+  return `<div class="sec-h"><span>Start</span></div>
+    <div class="seg" role="group" aria-label="When to start">
+      <button data-start="now" aria-pressed="${now}">Now</button>
+      <button data-start="scheduled" aria-pressed="${!now}">At a set time</button>
+    </div>
+    ${now
+      ? `<p class="muted" style="font-size:11px;margin-top:7px">It starts watching the moment you press the button.
+          There is no Armed phase — the badge goes straight to a count.</p>`
+      : `<input type="datetime-local" class="dt" style="margin-top:7px" value="2026-08-26T07:00" aria-label="Start time">`}`;
+}
+function armLabel(s) {
+  if (s.session !== "live" || s.refused) return "Arm — blocked, log in first";
+  return startMode === "now" ? "Start watching now" : `Arm for ${s.starts || START_AT}`;
+}
+const armBlocked = (s) => s.session !== "live" || !!s.refused;
+
 const checklist = (live) => [
   live ? ["Logged in to ArchersHub", "yes", "Checked just now — arming refuses without it"]
        : ["Not logged in to ArchersHub", "no", "Arming is blocked until you fix this one"],
@@ -613,8 +655,11 @@ function aPlan(s) {
       ? aHero("You stopped the Vigil at " + s.ended + ".", "It will not resume on its own. 2 subjects were unresolved when it stopped.")
       : empty
         ? aHero("Nothing to enlist yet.", "Pick a subject, then pick the one Section you actually want. The Vigil chases that Section and nothing else.")
-        : aHero(s.refused ? "Cannot arm — you are logged out." : "Ready to arm.",
-                s.refused ? "" : `Starts ${s.starts}. Nothing happens until then.`))
+        : aHero(s.refused ? "Cannot arm — you are logged out."
+                  : startMode === "now" ? "Ready to start." : "Ready to arm.",
+                s.refused ? ""
+                  : startMode === "now" ? "It begins watching as soon as you press the button, and keeps going until you stop it."
+                  : `Starts ${s.starts}. Nothing happens until then.`))
     + (s.refused ? `<div class="sec"><div class="note" data-tone="bad"><b class="note-t">Arming needs a live session</b>
         A Vigil cannot be armed against a logged-out student — it would wake at 07:00 with nothing to act on.
         Log in to ArchersHub in any tab, then arm again.
@@ -638,9 +683,10 @@ function aPicker() {
 }
 function aArm(s) {
   return `<div class="sec">
-    <div class="sec-h"><span>Before you arm</span></div>
+    ${startControl(s)}
+    <div class="sec-h" style="margin-top:6px"><span>${startMode === "now" ? "Before you start" : "Before you arm"}</span></div>
     <ul class="a-check">${checkHTML(s.session === "live")}</ul>
-    <button class="btn btn-primary btn-lg btn-block" style="margin-top:12px" ${s.session === "live" ? "" : "disabled"}>${s.session === "live" ? `Arm for ${s.starts}` : "Arm — blocked, log in first"}</button>
+    <button class="btn btn-primary btn-lg btn-block" style="margin-top:12px" ${armBlocked(s) ? "disabled" : ""}>${armLabel(s)}</button>
   </div>`;
 }
 function aRun(s) {
@@ -725,13 +771,10 @@ function bPlan(s) {
       reason a Vigil exists.</p>
     ${s.refused ? `<div class="note" data-tone="bad" style="margin-top:12px"><b class="note-t">Cannot arm — you are logged out</b>
       Arming checks the session first, so a Vigil is never scheduled against a login it does not have.</div>` : ""}
-    <div class="sec-h" style="margin-top:6px"><span>Start</span></div>
-    <div style="display:flex;gap:6px;align-items:center">
-      <input type="datetime-local" value="2026-08-26T07:00" style="flex:1;background:var(--surface);border:1px solid var(--line);color:var(--ink);border-radius:var(--r-sm);padding:6px 8px;font:12px var(--mono)">
-    </div>
-    <button class="btn btn-primary btn-lg btn-block" style="margin-top:10px" ${s.vigil !== "none" || s.session !== "live" ? "disabled" : ""}>
-      ${s.vigil !== "none" ? "A Vigil is already armed" : s.session !== "live" ? "Arm — blocked, log in first" : "Arm"}</button>
-    <details class="a-more" style="border-top:1px solid var(--line-soft);margin-top:10px"><summary>Night-before checklist</summary>
+    ${startControl(s)}
+    <button class="btn btn-primary btn-lg btn-block" style="margin-top:10px" ${s.vigil !== "none" || armBlocked(s) ? "disabled" : ""}>
+      ${s.vigil !== "none" ? "A Vigil is already running" : armLabel(s)}</button>
+    <details class="a-more" style="border-top:1px solid var(--line-soft);margin-top:10px"><summary>${startMode === "now" ? "Checklist" : "Night-before checklist"}</summary>
       <ul class="a-check" style="padding-bottom:10px">${checkHTML(s.session === "live")}</ul>
     </details></div>`;
 }
@@ -793,7 +836,7 @@ function bReport(s) {
    Configuration is a pushed screen, not a tab you can end up stranded on. */
 let cScreen = false;
 function renderC(s) {
-  if (cScreen || (s.vigil === "none" && !s.subjects.length)) return cPlanScreen(s);
+  if (cScreen || s.vigil === "none") return cPlanScreen(s); // no run yet, so the feed has nothing to be
   const stoppable = ["watching", "armed", "suspended", "stall"].includes(s.vigil);
   return `<div class="c-strip">
       <div class="c-strip-top">${chip(s)}<span class="muted" style="font-size:11px;flex:1">${cSummary(s)}</span>
@@ -860,21 +903,20 @@ function cPlanScreen(s) {
       <code>${x.code} ${x.wanted}</code>
       <span class="muted" style="font-size:10.5px">${!sec ? "no such Section" : sec.mine ? "you hold it" : sec.full ? "full right now" : sec.left + " left"}</span></div>`;
   }).join("");
-  return `${s.vigil !== "none" || s.subjects.length ? `<button class="c-back" data-screen>‹ Back</button>` : `<div class="hdr"><h1>Enlistment</h1>${chip(s)}</div>`}
+  return `${s.vigil !== "none" ? `<button class="c-back" data-screen>‹ Back</button>` : `<div class="hdr"><h1>Enlistment</h1>${chip(s)}</div>`}
     <div class="sec">
       <p class="muted" style="font-size:11.5px;margin-bottom:8px">One line per subject: the code, then the one Section you want.
         Paste it straight off your flowchart.</p>
       <textarea class="c-paste" spellcheck="false">${lines}</textarea>
       <div class="sec-h"><span>Checked against ArchersHub</span><b>just now</b></div>
       ${parsed}
-      <p class="muted" style="font-size:10.5px;margin-top:8px">Checked against the live catalogue, so a typo is caught tonight
-        rather than at 07:00. Full is fine — that is the whole point.</p>
-      <div class="sec-h" style="margin-top:8px"><span>Start</span></div>
-      <input type="datetime-local" value="2026-08-26T07:00" style="width:100%;background:var(--surface);border:1px solid var(--line);color:var(--ink);border-radius:var(--r-sm);padding:7px 9px;font:12px var(--mono)">
+      <p class="muted" style="font-size:10.5px;margin-top:8px">Checked against the live catalogue, so a typo is caught now
+        rather than at the strike moment. Full is fine — that is the whole point.</p>
+      ${startControl(s)}
       ${s.refused ? `<div class="note" data-tone="bad" style="margin-top:10px"><b class="note-t">You are logged out</b>
         Arming checks the session first and refuses. Log in, then arm.</div>` : ""}
       <ul class="a-check" style="margin-top:12px">${checkHTML(s.session === "live")}</ul>
-      <button class="btn btn-primary btn-lg btn-block" style="margin-top:12px" ${s.refused ? "disabled" : ""}>${s.refused ? "Arm — blocked, log in first" : "Arm for Wed 26 Aug, 07:00"}</button>
+      <button class="btn btn-primary btn-lg btn-block" style="margin-top:12px" ${armBlocked(s) ? "disabled" : ""}>${armLabel(s)}</button>
     </div>`;
 }
 
@@ -913,6 +955,7 @@ function render() {
   popupEl.querySelectorAll("[data-tab]").forEach((b) => b.onclick = () => { bTab = b.dataset.tab; render(); });
   popupEl.querySelectorAll("[data-filter]").forEach((b) => b.onclick = () => { bFilter = b.dataset.filter; render(); });
   popupEl.querySelectorAll("[data-screen]").forEach((b) => b.onclick = () => { cScreen = !cScreen; render(); });
+  popupEl.querySelectorAll("[data-start]").forEach((b) => b.onclick = () => { startMode = b.dataset.start; render(); });
   popupEl.querySelectorAll("[data-stop]").forEach((b) => b.onclick = () => {
     if (b.dataset.armed) { scenario = "stopped"; render(); return; }
     b.dataset.armed = "1"; b.textContent = "Stop — it will not resume. Sure?";
