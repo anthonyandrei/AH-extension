@@ -1,7 +1,6 @@
-/**
- * Pure functions for shaping and managing an enlistment Plan.
- * A Plan represents the student's desired subjects, each with exactly one Wanted Section.
- */
+function idEquals(a, b) {
+  return a === b || String(a) === String(b);
+}
 
 /**
  * Returns a fresh empty Plan object.
@@ -41,9 +40,7 @@ export function addSubject(plan, course, section) {
     };
   }
 
-  const exists = subjects.some(
-    (s) => s.courseCreationId === course.courseCreationId || String(s.courseCreationId) === String(course.courseCreationId)
-  );
+  const exists = subjects.some((s) => idEquals(s.courseCreationId, course.courseCreationId));
 
   if (exists) {
     return {
@@ -78,9 +75,7 @@ export function removeSubject(plan, courseCreationId) {
 
   return {
     academicSessionId: currentPlan.academicSessionId ?? null,
-    subjects: subjects.filter(
-      (s) => s.courseCreationId !== courseCreationId && String(s.courseCreationId) !== String(courseCreationId)
-    ),
+    subjects: subjects.filter((s) => !idEquals(s.courseCreationId, courseCreationId)),
   };
 }
 
@@ -99,7 +94,7 @@ export function setWantedSection(plan, courseCreationId, section) {
   return {
     academicSessionId: currentPlan.academicSessionId ?? null,
     subjects: subjects.map((s) => {
-      if (s.courseCreationId === courseCreationId || String(s.courseCreationId) === String(courseCreationId)) {
+      if (idEquals(s.courseCreationId, courseCreationId)) {
         return {
           ...s,
           sectionCreationId: section.sectionCreationId,
@@ -126,9 +121,7 @@ export function rehydrate(storedPlan, catalogue) {
   const courses = Array.isArray(catalogue?.courses) ? catalogue.courses : [];
 
   return storedPlan.subjects.map((subject) => {
-    const course = courses.find(
-      (c) => c.courseCreationId === subject.courseCreationId || String(c.courseCreationId) === String(subject.courseCreationId)
-    );
+    const course = courses.find((c) => idEquals(c.courseCreationId, subject.courseCreationId));
 
     if (!course) {
       return {
@@ -143,9 +136,7 @@ export function rehydrate(storedPlan, catalogue) {
     }
 
     const sections = Array.isArray(course.sections) ? course.sections : [];
-    const hasSection = sections.some(
-      (s) => s.sectionCreationId === subject.sectionCreationId || String(s.sectionCreationId) === String(subject.sectionCreationId)
-    );
+    const hasSection = sections.some((s) => idEquals(s.sectionCreationId, subject.sectionCreationId));
 
     return {
       courseCode: subject.courseCode,

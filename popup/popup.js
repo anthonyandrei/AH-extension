@@ -338,7 +338,7 @@ async function load() {
       return;
     }
 
-    if (catalogue.academicSessionId && !currentPlan.academicSessionId) {
+    if (catalogue.academicSessionId && currentPlan.academicSessionId !== catalogue.academicSessionId) {
       currentPlan.academicSessionId = catalogue.academicSessionId;
       await savePlan(currentPlan);
     }
