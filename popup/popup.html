@@ -1,57 +1,53 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ArchersHub Enlistment Automator</title>
-    <link rel="stylesheet" href="../styles/popup.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ArchersHub Enlistment Automator</title>
+  <link rel="stylesheet" href="../styles/popup.css">
 </head>
 <body>
-    <div class="container">
-        <h1>Enlistment Automator</h1>
+  <div class="hdr">
+    <h1>Enlistment</h1>
+  </div>
 
-        <!-- Add Subject Section -->
-        <div class="add-subject-section">
-            <h2>Add Subject & Section</h2>
-            <div class="form-group">
-                <label for="subjectInput">Subject Code:</label>
-                <input 
-                    type="text" 
-                    id="subjectInput" 
-                    placeholder="e.g., GEUSELF" 
-                    maxlength="20"
-                >
-            </div>
-            <div class="form-group">
-                <label for="sectionInput">Section:</label>
-                <input 
-                    type="text" 
-                    id="sectionInput" 
-                    placeholder="e.g., Y01" 
-                    maxlength="20"
-                >
-            </div>
-            <button id="addBtn" class="btn btn-primary">Add Subject</button>
-            <div id="addError" class="error-message"></div>
-        </div>
+  <div class="b-tabs" role="tablist">
+    <button class="b-tab" id="tabPlan" role="tab" aria-selected="true" aria-controls="panelPlan">Plan</button>
+    <button class="b-tab" id="tabRun" role="tab" aria-selected="false" aria-controls="panelRun">Run</button>
+    <button class="b-tab" id="tabReport" role="tab" aria-selected="false" aria-controls="panelReport">Report</button>
+  </div>
 
-        <!-- Subjects List Section -->
-        <div class="subjects-list-section">
-            <h2>Subjects to Enlist</h2>
-            <div id="subjectsList" class="subjects-list">
-                <p class="empty-message">No subjects added yet</p>
-            </div>
-        </div>
+  <div id="panelPlan" class="sec" role="tabpanel" aria-labelledby="tabPlan">
+    <table class="b-plan">
+      <thead>
+        <tr>
+          <th>Subject</th>
+          <th>Wanted Section</th>
+          <th>Now</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="planRows"></tbody>
+    </table>
 
-        <!-- Log Section -->
-        <div class="log-section">
-            <h2>Execution Log</h2>
-            <div id="executionLog" class="execution-log">
-                <p class="log-entry info">Ready to enlist. Please log in first on ArchersHub.</p>
-            </div>
-        </div>
+    <div class="add-row">
+      <select id="addCourse" class="b-sel" aria-label="Add subject">
+        <option value="">Add a subject…</option>
+      </select>
+      <button id="addBtn" class="btn btn-ghost">Add</button>
     </div>
 
-    <script src="popup.js"></script>
+    <div id="planStatus"></div>
+  </div>
+
+  <div id="panelRun" class="sec" role="tabpanel" aria-labelledby="tabRun" hidden>
+    <p class="empty">Nothing is running.</p>
+  </div>
+
+  <div id="panelReport" class="sec" role="tabpanel" aria-labelledby="tabReport" hidden>
+    <p class="empty">No Vigil has run yet.</p>
+  </div>
+
+  <script type="module" src="popup.js"></script>
 </body>
 </html>
