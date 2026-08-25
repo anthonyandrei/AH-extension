@@ -1,5 +1,4 @@
 /**
-/**
  * Pass loop engine, cadence backoff calculator, 6-disposition reconciliation,
  * rolling pass tail buffer, and Stop semantics for ArchersHub Enlistment Automator.
  * Implements docs/SPEC.md §7, §8, §10, §11, ADR-0003, ADR-0004, ADR-0005, ADR-0006, ADR-0007.
@@ -358,6 +357,66 @@ export async function stopVigil({
 }
 
 /**
+ * Diffs the held courses immediately before the strike against the post-write read.
+ * Unchanged or grown: normal Pass.
+ * Shrunk: Lost Slot (a held course is no longer held).
+ *
+ * @param {{
+ *   preHeldSnapshot: Record<string|number, number|null>,
+ *   postHeldSnapshot: Record<string|number, number|null>,
+ *   courses?: Array<object>
+ * }} params
+ * @returns {{
+ *   isShrunk: boolean,
+ *   lostSlots: Array<{ courseCreationId: string|number, preHeldSectionCreationId: string|number, courseCode?: string }>,
+ *   retainedCount: number,
+ *   gainedCount: number
+ * }}
+ */
+export function diffHeldCourses({
+  preHeldSnapshot = {},
+  postHeldSnapshot = {},
+  courses = [],
+}) {
+  const lostSlots = [];
+  let retainedCount = 0;
+  let gainedCount = 0;
+
+  for (const [cidStr, preSectionId] of Object.entries(preHeldSnapshot)) {
+    if (preSectionId !== null && preSectionId !== undefined) {
+      const postSectionId = postHeldSnapshot[cidStr];
+      if (postSectionId === null || postSectionId === undefined) {
+        // Course was held before strike, now NOT held -> Lost Slot!
+        const matchedCourse = courses.find((c) => idEquals(c.courseCreationId, cidStr));
+        lostSlots.push({
+          courseCreationId: cidStr,
+          preHeldSectionCreationId: preSectionId,
+          courseCode: matchedCourse ? matchedCourse.courseCode : cidStr,
+        });
+      } else {
+        retainedCount++;
+      }
+    }
+  }
+
+  for (const [cidStr, postSectionId] of Object.entries(postHeldSnapshot)) {
+    if (postSectionId !== null && postSectionId !== undefined) {
+      const preSectionId = preHeldSnapshot[cidStr];
+      if (preSectionId === null || preSectionId === undefined) {
+        gainedCount++;
+      }
+    }
+  }
+
+  return {
+    isShrunk: lostSlots.length > 0,
+    lostSlots,
+    retainedCount,
+    gainedCount,
+  };
+}
+
+/**
  * Executes a single Pass per SPEC §7, runs reconciliation on Step2Bound, updates storage & badge,
  * appends to passTail, and schedules the next pass tick.
  *
@@ -530,7 +589,7 @@ export async function executePass({
     updatedVigil.lastChangeAt = now;
   }
 
-  // 6. Check if Vigil is Complete
+  // 6. Check if Vigil is already Complete (all subjects held at Wanted Section)
   if (reconciliation.allSatisfied) {
     updatedVigil.state = 'complete';
     updatedVigil.nextFireTime = null;
@@ -588,7 +647,240 @@ export async function executePass({
     };
   }
 
-  // 7. Still Watching: Update badge, record pass, schedule next tick
+  // 7. Check if Actionable Dispositions Exist -> The Strike!
+  if (reconciliation.hasActionableDispositions && tabsApi && ownedTabId) {
+    if (storageApi?.set) {
+      await storageApi.set({ strikePending: true });
+    }
+
+    let strikeResponse = null;
+    try {
+      strikeResponse = await tabsApi.sendMessage(ownedTabId, {
+        type: 'EXECUTE_STRIKE',
+        dispositions: reconciliation.dispositions,
+        heldCourses: courses,
+      });
+    } catch (err) {
+      strikeResponse = { success: false, clicked: false, reason: err?.message };
+    } finally {
+      if (storageApi?.set) {
+        await storageApi.set({ strikePending: false });
+      }
+    }
+
+    // If Save Gate refused or strike could not click
+    if (!strikeResponse?.clicked) {
+      const nextDelay = computeNextPassDelay({
+        lastChangeAt: updatedVigil.lastChangeAt,
+        now,
+        rateLimited: updatedVigil.rateLimited,
+      });
+
+      updatedVigil.nextFireTime = now + nextDelay;
+
+      if (storageApi?.set) {
+        await storageApi.set({
+          vigil: updatedVigil,
+          reconciliation,
+          lastHeldSnapshot: currentHeldSnapshot,
+          lastSectionsSnapshot: currentSectionsSnapshot,
+        });
+      }
+
+      const passRecord = {
+        id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: now,
+        state: PAGE_STATES.STEP2_BOUND,
+        complete: false,
+        interval: nextDelay,
+        unresolvedCount: reconciliation.unresolvedCount,
+        allSatisfied: false,
+        dispositions: reconciliation.dispositions,
+        summary: `Save Gate refused: ${strikeResponse?.reason || 'unapproved'}`,
+      };
+
+      await appendPassTail({ passRecord, storageApi });
+
+      if (alarmsApi?.create) {
+        alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
+      }
+
+      return {
+        isComplete: false,
+        state: 'watching',
+        strikePerformed: false,
+        saveGateApproved: false,
+        reason: strikeResponse?.reason,
+        reconciliation,
+      };
+    }
+
+    // Strike clicked! #btnEnlistment was clicked once.
+    // Post-Write: Re-read catalogue over HTTP and diff held set
+    let postCatalogue = null;
+    try {
+      postCatalogue = await readCatalogue(fetchImpl, baseUrl);
+    } catch (err) {
+      postCatalogue = { loggedIn: false, error: err?.message };
+    }
+
+    const postCourses = Array.isArray(postCatalogue?.courses) ? postCatalogue.courses : courses;
+    const postHeldSnapshot = {};
+    const postSectionsSnapshot = {};
+    for (const c of postCourses) {
+      postHeldSnapshot[c.courseCreationId] = c.heldSectionCreationId ?? null;
+      postSectionsSnapshot[c.courseCreationId] = Array.isArray(c.sections)
+        ? c.sections.map((s) => s.sectionCreationId)
+        : [];
+    }
+
+    // Diff held set against pre-click snapshot
+    const diffResult = diffHeldCourses({
+      preHeldSnapshot: currentHeldSnapshot,
+      postHeldSnapshot,
+      courses: postCourses,
+    });
+
+    if (diffResult.isShrunk) {
+      // Lost Slot! Tier: Notice (does NOT stop the Vigil)
+      for (const lost of diffResult.lostSlots) {
+        await appendLedgerEntry({
+          entry: {
+            tier: 'notice',
+            type: 'lost_slot',
+            title: 'Lost Slot',
+            cause: `Held slot for ${lost.courseCode} was lost during switch`,
+            timestamp: now,
+          },
+          storageApi,
+          notificationsApi,
+          alarmsApi,
+          now,
+        });
+      }
+    }
+
+    // Reconcile against post-write catalogue
+    const postReconciliation = reconcilePlan({ plan, courses: postCourses });
+
+    // A write occurred, so reset cadence
+    updatedVigil.lastChangeAt = now;
+    updatedVigil.previousHeldSnapshot = postHeldSnapshot;
+    updatedVigil.previousSectionsSnapshot = postSectionsSnapshot;
+
+    if (postReconciliation.allSatisfied) {
+      updatedVigil.state = 'complete';
+      updatedVigil.nextFireTime = null;
+
+      if (storageApi?.set) {
+        await storageApi.set({
+          vigil: updatedVigil,
+          lastCompletePassAt: now,
+          reconciliation: postReconciliation,
+          lastHeldSnapshot: postHeldSnapshot,
+          lastSectionsSnapshot: postSectionsSnapshot,
+        });
+      }
+
+      if (alarmsApi?.clear) {
+        await alarmsApi.clear('vigil_pass');
+      }
+
+      updateBadge({ state: 'complete', actionApi });
+
+      await appendLedgerEntry({
+        entry: {
+          tier: 'notice',
+          type: 'complete',
+          title: 'Vigil complete',
+          cause: 'Every subject holds its Wanted Section',
+          timestamp: now,
+        },
+        storageApi,
+        notificationsApi,
+        alarmsApi,
+        now,
+      });
+
+      const passRecord = {
+        id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: now,
+        state: PAGE_STATES.STEP2_BOUND,
+        complete: true,
+        unresolvedCount: 0,
+        allSatisfied: true,
+        strikePerformed: true,
+        dispositions: postReconciliation.dispositions,
+        summary: 'Strike executed: Complete — all subjects satisfied',
+      };
+
+      await appendPassTail({ passRecord, storageApi });
+
+      return {
+        isComplete: true,
+        state: 'complete',
+        strikePerformed: true,
+        unresolvedCount: 0,
+        allSatisfied: true,
+        reconciliation: postReconciliation,
+      };
+    }
+
+    // Strike performed, but still watching some subjects
+    const nextDelay = computeNextPassDelay({
+      lastChangeAt: updatedVigil.lastChangeAt,
+      now,
+      rateLimited: updatedVigil.rateLimited,
+    });
+
+    updatedVigil.nextFireTime = now + nextDelay;
+
+    if (storageApi?.set) {
+      await storageApi.set({
+        vigil: updatedVigil,
+        lastCompletePassAt: now,
+        reconciliation: postReconciliation,
+        lastHeldSnapshot: postHeldSnapshot,
+        lastSectionsSnapshot: postSectionsSnapshot,
+      });
+    }
+
+    updateBadge({
+      state: 'watching',
+      unresolvedCount: postReconciliation.unresolvedCount,
+      actionApi,
+    });
+
+    const passRecord = {
+      id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: now,
+      state: PAGE_STATES.STEP2_BOUND,
+      complete: true,
+      strikePerformed: true,
+      interval: nextDelay,
+      unresolvedCount: postReconciliation.unresolvedCount,
+      allSatisfied: false,
+      dispositions: postReconciliation.dispositions,
+      summary: `Strike executed: ${postReconciliation.unresolvedCount} watching`,
+    };
+
+    await appendPassTail({ passRecord, storageApi });
+
+    if (alarmsApi?.create) {
+      alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
+    }
+
+    return {
+      isComplete: true,
+      state: 'watching',
+      strikePerformed: true,
+      unresolvedCount: postReconciliation.unresolvedCount,
+      allSatisfied: false,
+      reconciliation: postReconciliation,
+    };
+  }
+
+  // 8. No Actionable Dispositions (watching, sections still full): Update badge, record pass, schedule next tick
   const nextDelay = computeNextPassDelay({
     lastChangeAt: updatedVigil.lastChangeAt,
     now,
@@ -639,3 +931,4 @@ export async function executePass({
     reconciliation,
   };
 }
+

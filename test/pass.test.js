@@ -10,6 +10,7 @@ import {
   appendPassTail,
   executePass,
   stopVigil,
+  diffHeldCourses,
   DISPOSITIONS,
 } from '../popup/pass.js';
 import { PAGE_STATES } from '../content/classifier.js';
@@ -754,5 +755,407 @@ describe('pass module', () => {
       assert.ok(completeEntry);
       assert.equal(completeEntry.tier, 'notice');
     });
+
+    it('on actionable dispositions when Save Gate refuses: does not click, records incomplete pass, schedules next pass', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' },
+          ],
+        },
+        ownedTabId: 101,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      // Mock classify -> STEP2_BOUND; mock strike -> Save Gate refused
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          return { success: false, clicked: false, saveGateApproved: false, reason: 'Held course CS101 is unchecked' };
+        }
+        return { success: true };
+      };
+
+      const mockFetch = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `
+              <input id="hdfAcademicSessionId" value="10" />
+              <input id="hdfRuleAllocationId" value="20" />
+              <input id="hdfEnlistmentRuleId" value="30" />
+            `,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: 501, IS_REGISTERED: 1 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'G02 {Avail. Slots: 5}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 5000,
+      });
+
+      assert.equal(result.isComplete, false);
+      assert.equal(result.strikePerformed, false);
+      assert.equal(result.saveGateApproved, false);
+      assert.match(result.reason, /unchecked/);
+
+      const store = storage._getStore();
+      assert.equal(store.strikePending, false); // strikePending cleared!
+      assert.equal(store.passTail.length, 1);
+      assert.equal(store.passTail[0].complete, false);
+      assert.match(store.passTail[0].summary, /Save Gate refused/);
+      assert.ok((await alarms.get('vigil_pass'))); // Next pass scheduled!
+    });
+
+    it('on actionable dispositions when strike clicks: sets strikePending during strike, re-reads catalogue, and transitions to complete if all satisfied', async () => {
+      let strikePendingObservedDuringStrike = null;
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' },
+          ],
+        },
+        ownedTabId: 101,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          const storeDuringStrike = storage._getStore();
+          strikePendingObservedDuringStrike = storeDuringStrike.strikePending;
+          return { success: true, clicked: true, saveGateApproved: true };
+        }
+        return { success: true };
+      };
+
+      let fetchCallCount = 0;
+      const mockFetch = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `
+              <input id="hdfAcademicSessionId" value="10" />
+              <input id="hdfRuleAllocationId" value="20" />
+              <input id="hdfEnlistmentRuleId" value="30" />
+            `,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          fetchCallCount++;
+          // First read before strike: CS101 held at 501
+          // Second read after strike: CS101 held at 502 (satisfied!)
+          const heldSec = fetchCallCount === 1 ? 501 : 502;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: heldSec, IS_REGISTERED: 1 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'G02 {Avail. Slots: 5}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 5000,
+      });
+
+      assert.equal(strikePendingObservedDuringStrike, true); // strikePending was true during strike!
+      assert.equal(result.isComplete, true);
+      assert.equal(result.strikePerformed, true);
+      assert.equal(result.state, 'complete');
+      assert.equal(result.allSatisfied, true);
+
+      const store = storage._getStore();
+      assert.equal(store.strikePending, false); // strikePending cleared after strike!
+      assert.equal(store.vigil.state, 'complete');
+      assert.equal(action._getBadge().text, '✓');
+      assert.equal(action._getBadge().color, '#10B981');
+    });
+
+    it('on post-write shrink (Lost Slot): produces Notice notification and ledger entry without stopping the Vigil', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' },
+          ],
+        },
+        ownedTabId: 101,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          return { success: true, clicked: true, saveGateApproved: true };
+        }
+        return { success: true };
+      };
+
+      let fetchCallCount = 0;
+      const mockFetch = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `
+              <input id="hdfAcademicSessionId" value="10" />
+              <input id="hdfRuleAllocationId" value="20" />
+              <input id="hdfEnlistmentRuleId" value="30" />
+            `,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          fetchCallCount++;
+          // First read before strike: CS101 held at 501
+          // Second read after strike: CS101 held is NULL! (Lost Slot)
+          const heldSec = fetchCallCount === 1 ? 501 : null;
+          const isReg = fetchCallCount === 1 ? 1 : 0;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: heldSec, IS_REGISTERED: isReg },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'G02 {Avail. Slots: 0}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 5000,
+      });
+
+      assert.equal(result.isComplete, true);
+      assert.equal(result.strikePerformed, true);
+      assert.equal(result.state, 'watching'); // Vigil continues watching!
+      assert.equal(result.unresolvedCount, 1);
+
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'watching'); // State remains watching!
+
+      // Notice logged for Lost Slot
+      const ledger = store.ledger || [];
+      const lostEntry = ledger.find((e) => e.type === 'lost_slot');
+      assert.ok(lostEntry);
+      assert.equal(lostEntry.tier, 'notice');
+      assert.match(lostEntry.cause, /CS101/);
+
+      // Notification fired for Lost Slot
+      const notifs = notifications._getList();
+      assert.ok(notifs.length >= 1);
+      assert.match(notifs[0].title, /Lost Slot/);
+
+      // Vigil pass alarm scheduled to continue chasing Wanted Section
+      assert.ok((await alarms.get('vigil_pass')));
+    });
+
+    it('held-but-never-requested Section survives across strike and post-write diff', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' },
+          ],
+        },
+        ownedTabId: 101,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      let passedDispositions = null;
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          passedDispositions = msg.dispositions;
+          return { success: true, clicked: true, saveGateApproved: true };
+        }
+        return { success: true };
+      };
+
+      let fetchCallCount = 0;
+      const mockFetch = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `
+              <input id="hdfAcademicSessionId" value="10" />
+              <input id="hdfRuleAllocationId" value="20" />
+              <input id="hdfEnlistmentRuleId" value="30" />
+            `,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          fetchCallCount++;
+          const cs101Sec = fetchCallCount === 1 ? 501 : 502;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: cs101Sec, IS_REGISTERED: 1 },
+                // Unrequested course 999 is held at 888 before and after strike
+                { COURSE_CREATION_ID: 999, COURSE_CODE: 'UNREQ', SECTION_CREATION_ID: 888, IS_REGISTERED: 1 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'G02 {Avail. Slots: 5}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 5000,
+      });
+
+      assert.equal(result.isComplete, true);
+      assert.equal(result.allSatisfied, true);
+
+      // Verify unrequested course was passed as 'preserve' disposition to strike
+      assert.ok(passedDispositions);
+      const unreqDisp = passedDispositions.find((d) => d.courseCreationId === 999 || d.courseCode === 'UNREQ');
+      assert.ok(unreqDisp);
+      assert.equal(unreqDisp.disposition, DISPOSITIONS.PRESERVE);
+
+      // Post-write snapshot includes unrequested course preserved
+      const store = storage._getStore();
+      assert.equal(store.lastHeldSnapshot[999], 888);
+    });
+  });
+
+  describe('diffHeldCourses', () => {
+    it('returns isShrunk false when held courses are unchanged or gained', () => {
+      const preHeld = { 101: 501, 102: 601 };
+      const postHeld = { 101: 502, 102: 601, 103: 701 }; // 101 upgraded, 102 retained, 103 gained
+
+      const result = diffHeldCourses({
+        preHeldSnapshot: preHeld,
+        postHeldSnapshot: postHeld,
+        courses: [{ courseCreationId: 101, courseCode: 'CS101' }],
+      });
+
+      assert.equal(result.isShrunk, false);
+      assert.equal(result.lostSlots.length, 0);
+      assert.equal(result.retainedCount, 2);
+      assert.equal(result.gainedCount, 1);
+    });
+
+    it('returns isShrunk true with lost slot details when a held course is no longer held', () => {
+      const preHeld = { 101: 501, 102: 601 };
+      const postHeld = { 101: null, 102: 601 }; // 101 was lost!
+
+      const result = diffHeldCourses({
+        preHeldSnapshot: preHeld,
+        postHeldSnapshot: postHeld,
+        courses: [{ courseCreationId: 101, courseCode: 'CS101' }],
+      });
+
+      assert.equal(result.isShrunk, true);
+      assert.equal(result.lostSlots.length, 1);
+      assert.equal(result.lostSlots[0].courseCreationId, '101');
+      assert.equal(result.lostSlots[0].courseCode, 'CS101');
+      assert.equal(result.lostSlots[0].preHeldSectionCreationId, 501);
+    });
   });
 });
+

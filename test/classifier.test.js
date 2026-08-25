@@ -9,6 +9,10 @@ import {
   startInnerLoop,
   handleContentMessage,
   executeStateAction,
+  findCourseRow,
+  evaluateSaveGate,
+  applyDispositionsToDom,
+  executeStrike,
 } from '../content/classifier.js';
 
 // Minimal mock DOM node builder for headless Node testing
@@ -24,17 +28,36 @@ function createMockElement({
   hidden = false,
   checked = false,
   disabled = false,
+  value = '',
+  type = '',
+  attributes = {},
+  dataset = {},
+  options = [],
+  textContent = '',
   onClick = null,
 } = {}) {
   const classes = new Set(classList);
   const events = new Map();
+  const attrs = new Map(Object.entries(attributes));
   let clickedCount = 0;
+  let currentVal = value;
+  let currentChecked = checked;
+  let text = textContent;
 
   const elem = {
     id,
     tagName: tagName.toUpperCase(),
-    checked,
+    type: type || (attrs.get('type') || ''),
     disabled,
+    dataset: { ...dataset },
+    get value() { return currentVal; },
+    set value(v) { currentVal = String(v); },
+    get checked() { return currentChecked; },
+    set checked(c) { currentChecked = Boolean(c); },
+    get textContent() { return text || innerHTML || (elem.children.map(c => c.textContent || '').join(' ')); },
+    set textContent(t) { text = t; },
+    get innerText() { return elem.textContent; },
+    set innerText(t) { text = t; },
     get clickCount() { return clickedCount; },
     click: () => {
       clickedCount++;
@@ -42,6 +65,9 @@ function createMockElement({
         onClick(elem);
       }
     },
+    getAttribute: (attr) => attrs.get(attr) ?? null,
+    setAttribute: (attr, val) => attrs.set(attr, String(val)),
+    hasAttribute: (attr) => attrs.has(attr),
     addEventListener: (type, handler) => {
       if (!events.has(type)) events.set(type, []);
       events.get(type).push(handler);
@@ -78,6 +104,10 @@ function createMockElement({
     matches: (selector) => matchesSelector(elem, selector),
   };
 
+  if (tagName.toUpperCase() === 'SELECT') {
+    elem.options = options.length > 0 ? options : children.filter((c) => c.tagName === 'OPTION');
+  }
+
   Object.defineProperty(elem, 'innerHTML', {
     get: () => innerHTML || elem.children.map(c => c.outerHTML || '').join(''),
     set: (val) => { innerHTML = val; },
@@ -93,11 +123,13 @@ function createMockElement({
 
 function matchesSelector(elem, selector) {
   if (!elem || !selector) return false;
-  const parts = selector.trim().split(/\s+/);
-  if (parts.length > 1) {
-    return false;
+  const sel = selector.trim();
+
+  // Comma separated selectors
+  if (sel.includes(',')) {
+    return sel.split(',').some((s) => matchesSelector(elem, s.trim()));
   }
-  const sel = parts[0];
+
   if (sel.startsWith('#')) {
     const [idPart, classPart] = sel.slice(1).split('.');
     if (elem.id !== idPart) return false;
@@ -107,9 +139,29 @@ function matchesSelector(elem, selector) {
   if (sel.startsWith('.')) {
     return elem.classList.contains(sel.slice(1));
   }
+  if (sel === 'input[type="checkbox"]' || sel === "input[type='checkbox']") {
+    return elem.tagName === 'INPUT' && (elem.type === 'checkbox' || elem.getAttribute?.('type') === 'checkbox');
+  }
   if (sel === 'form[action*="Login"]' || sel === 'form[action*="login"]') {
     return elem.tagName === 'FORM' && (elem.action?.toLowerCase().includes('login') || elem.id?.toLowerCase().includes('login'));
   }
+  if (sel.startsWith('select.')) {
+    const cls = sel.slice(7);
+    return elem.tagName === 'SELECT' && elem.classList.contains(cls);
+  }
+
+  const attrMatch = sel.match(/^(?:([a-zA-Z0-9_-]+))?\[([a-zA-Z0-9_-]+)(?:(\*?=|=)?["']?([^"'\]]+)["']?)?\]$/);
+  if (attrMatch) {
+    const [, tag, attrName, op, attrVal] = attrMatch;
+    if (tag && elem.tagName.toLowerCase() !== tag.toLowerCase()) return false;
+    const actualVal = elem.getAttribute ? elem.getAttribute(attrName) : elem[attrName];
+    if (attrVal === undefined) return actualVal !== null && actualVal !== undefined;
+    if (op === '*=') {
+      return String(actualVal || '').toLowerCase().includes(String(attrVal).toLowerCase());
+    }
+    return String(actualVal) === String(attrVal);
+  }
+
   return elem.tagName.toLowerCase() === sel.toLowerCase();
 }
 
@@ -857,6 +909,362 @@ describe('classifier module', () => {
       assert.equal(result.state, PAGE_STATES.LOGGED_OUT);
     });
   });
+
+  describe('findCourseRow', () => {
+    it('finds row by data-course-id or data-course-creation-id', () => {
+      const row1 = createMockElement({ tagName: 'tr', attributes: { 'data-course-creation-id': '101' } });
+      const row2 = createMockElement({ tagName: 'tr', attributes: { 'data-course-id': '102' } });
+      const tbody = createMockElement({ tagName: 'tbody', children: [row1, row2] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [tbody] });
+
+      assert.equal(findCourseRow(tbl, 101), row1);
+      assert.equal(findCourseRow(tbl, '102'), row2);
+      assert.equal(findCourseRow(tbl, 999), null);
+    });
+
+    it('finds row by data-course-code or hidden input COURSE_CREATION_ID', () => {
+      const hiddenInput = createMockElement({
+        tagName: 'input',
+        attributes: { name: 'COURSE_CREATION_ID' },
+        value: '202',
+      });
+      const row1 = createMockElement({ tagName: 'tr', attributes: { 'data-course-code': 'CS101' } });
+      const row2 = createMockElement({ tagName: 'tr', children: [hiddenInput] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [row1, row2] });
+
+      assert.equal(findCourseRow(tbl, null, 'CS101'), row1);
+      assert.equal(findCourseRow(tbl, 202), row2);
+      assert.equal(findCourseRow(tbl, 999, 'UNKNOWN'), null);
+    });
+  });
+
+  describe('applyDispositionsToDom', () => {
+    it('ticks unchecked row and selects Wanted Section for acquire disposition', () => {
+      const chk = createMockElement({ tagName: 'input', type: 'checkbox', checked: false });
+      const opt1 = createMockElement({ tagName: 'option', value: '501', textContent: 'G01 {Avail: 5}' });
+      const opt2 = createMockElement({ tagName: 'option', value: '502', textContent: 'G02 {Avail: 10}' });
+      const ddl = createMockElement({ tagName: 'select', classList: ['ddlSection'], children: [opt1, opt2], value: '' });
+      const row = createMockElement({
+        tagName: 'tr',
+        attributes: { 'data-course-creation-id': '101' },
+        children: [chk, ddl],
+      });
+      const tbody = createMockElement({ tagName: 'tbody', children: [row] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [tbody] });
+      const doc = createMockDocument({ elements: [tbl] });
+
+      const dispositions = [{
+        courseCreationId: 101,
+        courseCode: 'CS101',
+        wantedSectionCreationId: 502,
+        wantedSectionCode: 'G02',
+        disposition: 'acquire',
+      }];
+
+      const res = applyDispositionsToDom({ dispositions, document: doc });
+      assert.equal(res.success, true);
+      assert.equal(res.appliedCount, 1);
+      assert.equal(chk.checked, true); // Row ticked!
+      assert.equal(ddl.value, '502'); // Section 502 selected!
+    });
+
+    it('sets dropdown on already-checked row for upgrade disposition (switch)', () => {
+      const chk = createMockElement({ tagName: 'input', type: 'checkbox', checked: true });
+      const opt1 = createMockElement({ tagName: 'option', value: '501', textContent: 'G01' });
+      const opt2 = createMockElement({ tagName: 'option', value: '502', textContent: 'G02' });
+      const ddl = createMockElement({ tagName: 'select', classList: ['ddlSection'], children: [opt1, opt2], value: '501' });
+      const row = createMockElement({
+        tagName: 'tr',
+        attributes: { 'data-course-creation-id': '101' },
+        children: [chk, ddl],
+      });
+      const tbody = createMockElement({ tagName: 'tbody', children: [row] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [tbody] });
+      const doc = createMockDocument({ elements: [tbl] });
+
+      const dispositions = [{
+        courseCreationId: 101,
+        courseCode: 'CS101',
+        wantedSectionCreationId: 502,
+        wantedSectionCode: 'G02',
+        disposition: 'upgrade',
+      }];
+
+      const res = applyDispositionsToDom({ dispositions, document: doc });
+      assert.equal(res.success, true);
+      assert.equal(res.appliedCount, 1);
+      assert.equal(chk.checked, true);
+      assert.equal(ddl.value, '502'); // Switched to 502!
+    });
+
+    it('preserves held unrequested rows and satisfied rows without un-ticking', () => {
+      const chkPreserve = createMockElement({ tagName: 'input', type: 'checkbox', checked: true });
+      const ddlPreserve = createMockElement({ tagName: 'select', value: '888' });
+      const rowPreserve = createMockElement({
+        tagName: 'tr',
+        attributes: { 'data-course-creation-id': '999' },
+        children: [chkPreserve, ddlPreserve],
+      });
+
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [rowPreserve] });
+      const doc = createMockDocument({ elements: [tbl] });
+
+      const dispositions = [{
+        courseCreationId: 999,
+        courseCode: 'UNREQUESTED',
+        disposition: 'preserve',
+      }];
+
+      const res = applyDispositionsToDom({ dispositions, document: doc });
+      assert.equal(res.success, true);
+      assert.equal(chkPreserve.checked, true); // Still checked!
+      assert.equal(ddlPreserve.value, '888'); // Still 888!
+    });
+  });
+
+  describe('evaluateSaveGate (§8)', () => {
+    it('approves when all 3 conditions are satisfied', () => {
+      // Row 1: Held & requested (satisfied / upgrade)
+      const chk1 = createMockElement({ tagName: 'input', type: 'checkbox', checked: true });
+      const ddl1 = createMockElement({ tagName: 'select', value: '502' });
+      const row1 = createMockElement({
+        tagName: 'tr',
+        attributes: { 'data-course-creation-id': '101' },
+        children: [chk1, ddl1],
+      });
+
+      // Row 2: Held unrequested (preserve)
+      const chk2 = createMockElement({ tagName: 'input', type: 'checkbox', checked: true });
+      const ddl2 = createMockElement({ tagName: 'select', value: '888' });
+      const row2 = createMockElement({
+        tagName: 'tr',
+        attributes: { 'data-course-creation-id': '999' },
+        children: [chk2, ddl2],
+      });
+
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [row1, row2] });
+      const doc = createMockDocument({ elements: [tbl] });
+
+      const heldCourses = [
+        { courseCreationId: 101, courseCode: 'CS101', heldSectionCreationId: 501, isRegistered: 1 },
+        { courseCreationId: 999, courseCode: 'UNREQ', heldSectionCreationId: 888, isRegistered: 1 },
+      ];
+
+      const actingDispositions = [
+        { courseCreationId: 101, courseCode: 'CS101', wantedSectionCreationId: 502, disposition: 'upgrade' },
+      ];
+
+      const res = evaluateSaveGate({ heldCourses, actingDispositions, document: doc, untickedCount: 0 });
+      assert.equal(res.approved, true);
+    });
+
+    it('Condition 1 failure: refuses when a held course row is missing from the table', () => {
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [] }); // Table has no rows
+      const doc = createMockDocument({ elements: [tbl] });
+
+      const heldCourses = [
+        { courseCreationId: 101, courseCode: 'CS101', heldSectionCreationId: 501, isRegistered: 1 },
+      ];
+
+      const res = evaluateSaveGate({ heldCourses, actingDispositions: [], document: doc });
+      assert.equal(res.approved, false);
+      assert.match(res.reason, /missing from table/i);
+    });
+
+    it('Condition 1 failure: refuses when a held course is unchecked in DOM', () => {
+      const chk = createMockElement({ tagName: 'input', type: 'checkbox', checked: false }); // Unchecked!
+      const ddl = createMockElement({ tagName: 'select', value: '501' });
+      const row = createMockElement({
+        tagName: 'tr',
+        attributes: { 'data-course-creation-id': '101' },
+        children: [chk, ddl],
+      });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [row] });
+      const doc = createMockDocument({ elements: [tbl] });
+
+      const heldCourses = [
+        { courseCreationId: 101, courseCode: 'CS101', heldSectionCreationId: 501, isRegistered: 1 },
+      ];
+
+      const res = evaluateSaveGate({ heldCourses, actingDispositions: [], document: doc });
+      assert.equal(res.approved, false);
+      assert.match(res.reason, /unchecked/i);
+    });
+
+    it('Condition 1 failure: refuses when a held course dropdown has null / empty / 0 section id', () => {
+      const chk = createMockElement({ tagName: 'input', type: 'checkbox', checked: true });
+      const ddl = createMockElement({ tagName: 'select', value: '0' }); // Null section value!
+      const row = createMockElement({
+        tagName: 'tr',
+        attributes: { 'data-course-creation-id': '101' },
+        children: [chk, ddl],
+      });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [row] });
+      const doc = createMockDocument({ elements: [tbl] });
+
+      const heldCourses = [
+        { courseCreationId: 101, courseCode: 'CS101', heldSectionCreationId: 501, isRegistered: 1 },
+      ];
+
+      const res = evaluateSaveGate({ heldCourses, actingDispositions: [], document: doc });
+      assert.equal(res.approved, false);
+      assert.match(res.reason, /null or empty section id/i);
+    });
+
+    it('Condition 2 failure: refuses when an acting subject dropdown does not match intended section id', () => {
+      const chk = createMockElement({ tagName: 'input', type: 'checkbox', checked: true });
+      const ddl = createMockElement({ tagName: 'select', value: '501' }); // Dropdown still holds 501, not 502
+      const row = createMockElement({
+        tagName: 'tr',
+        attributes: { 'data-course-creation-id': '101' },
+        children: [chk, ddl],
+      });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [row] });
+      const doc = createMockDocument({ elements: [tbl] });
+
+      const actingDispositions = [
+        { courseCreationId: 101, courseCode: 'CS101', wantedSectionCreationId: 502, disposition: 'upgrade' },
+      ];
+
+      const res = evaluateSaveGate({ heldCourses: [], actingDispositions, document: doc });
+      assert.equal(res.approved, false);
+      assert.match(res.reason, /intended '502'/i);
+    });
+
+    it('Condition 3 failure: refuses when an automator uncheck has occurred', () => {
+      const chk = createMockElement({ tagName: 'input', type: 'checkbox', checked: true });
+      const ddl = createMockElement({ tagName: 'select', value: '502' });
+      const row = createMockElement({
+        tagName: 'tr',
+        attributes: { 'data-course-creation-id': '101' },
+        children: [chk, ddl],
+      });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [row] });
+      const doc = createMockDocument({ elements: [tbl] });
+
+      const res = evaluateSaveGate({
+        heldCourses: [],
+        actingDispositions: [{ courseCreationId: 101, wantedSectionCreationId: 502, disposition: 'acquire' }],
+        document: doc,
+        untickedCount: 1, // Unticked!
+      });
+      assert.equal(res.approved, false);
+      assert.match(res.reason, /un-ticked/i);
+    });
+  });
+
+  describe('executeStrike and EXECUTE_STRIKE runtime message', () => {
+    it('executes strike: clicks #btnEnlistment exactly once when Save Gate approves', () => {
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const chk = createMockElement({ tagName: 'input', type: 'checkbox', checked: false });
+      const opt = createMockElement({ tagName: 'option', value: '502', textContent: 'G02' });
+      const ddl = createMockElement({ tagName: 'select', classList: ['ddlSection'], children: [opt], value: '' });
+      const row = createMockElement({
+        tagName: 'tr',
+        attributes: { 'data-course-creation-id': '101' },
+        children: [chk, ddl],
+      });
+      const tbody = createMockElement({ tagName: 'tbody', children: [row] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [tbody] });
+
+      let enlistmentClicks = 0;
+      const btnEnlistment = createMockElement({
+        id: 'btnEnlistment',
+        style: { display: 'inline-block' },
+        onClick: () => { enlistmentClicks++; },
+      });
+
+      let confirmClicks = 0;
+      const btnConfirmEnlistment = createMockElement({
+        id: 'btnConfirmEnlistment',
+        style: { display: 'inline-block' },
+        onClick: () => { confirmClicks++; },
+      });
+
+      const doc = createMockDocument({
+        elements: [step2, tbl, btnEnlistment, btnConfirmEnlistment],
+      });
+      const win = createMockWindow({ document: doc });
+
+      const dispositions = [{
+        courseCreationId: 101,
+        courseCode: 'CS101',
+        wantedSectionCreationId: 502,
+        wantedSectionCode: 'G02',
+        disposition: 'acquire',
+      }];
+
+      const result = executeStrike({
+        dispositions,
+        heldCourses: [],
+        document: doc,
+        window: win,
+      });
+
+      assert.equal(result.success, true);
+      assert.equal(result.clicked, true);
+      assert.equal(result.saveGateApproved, true);
+      assert.equal(enlistmentClicks, 1); // #btnEnlistment clicked exactly ONCE!
+      assert.equal(confirmClicks, 0); // #btnConfirmEnlistment NEVER touched!
+    });
+
+    it('refuses to click when Save Gate refuses and leaves #btnEnlistment unclicked', () => {
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      // Row is missing from table -> Save Gate will refuse
+      const tbody = createMockElement({ tagName: 'tbody', children: [createMockElement({ tagName: 'tr' })] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [tbody] });
+
+      let enlistmentClicks = 0;
+      const btnEnlistment = createMockElement({
+        id: 'btnEnlistment',
+        style: { display: 'inline-block' },
+        onClick: () => { enlistmentClicks++; },
+      });
+
+      const doc = createMockDocument({
+        elements: [step2, tbl, btnEnlistment],
+      });
+      const win = createMockWindow({ document: doc });
+
+      const dispositions = [{
+        courseCreationId: 101,
+        courseCode: 'CS101',
+        wantedSectionCreationId: 502,
+        disposition: 'acquire',
+      }];
+
+      const result = executeStrike({
+        dispositions,
+        heldCourses: [],
+        document: doc,
+        window: win,
+      });
+
+      assert.equal(result.success, false);
+      assert.equal(result.clicked, false);
+      assert.equal(result.saveGateApproved, false);
+      assert.equal(enlistmentClicks, 0); // NOT clicked!
+    });
+
+    it('handleContentMessage answers EXECUTE_STRIKE message', () => {
+      let responsePayload = null;
+      const sendResponse = (res) => { responsePayload = res; };
+
+      const mockStrike = () => ({ success: true, clicked: true, saveGateApproved: true });
+
+      handleContentMessage(
+        { type: 'EXECUTE_STRIKE', dispositions: [], heldCourses: [] },
+        {},
+        sendResponse,
+        { executeStrike: mockStrike }
+      );
+
+      assert.ok(responsePayload);
+      assert.equal(responsePayload.success, true);
+      assert.equal(responsePayload.clicked, true);
+    });
+  });
 });
+
 
 
