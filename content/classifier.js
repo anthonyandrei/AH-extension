@@ -394,17 +394,20 @@ export function handleContentMessage(message, sender, sendResponse, deps = {}) {
       deps.activeLoop.stop();
     }
     const autoAct = msgType === 'STEER_TAB' || Boolean(message?.autoAct);
+    let latestResult = null;
     const loop = startInnerLoopFn({
       document: deps.document,
       window: deps.window,
       location: deps.location,
       autoAct,
       onStateChange: (stateRes) => {
+        latestResult = stateRes;
         if (deps.sendMessage) {
           deps.sendMessage({ type: 'PAGE_STATE_CHANGED', ...stateRes });
         }
       },
       onStop: (finalRes) => {
+        latestResult = finalRes;
         if (deps.sendMessage) {
           if (finalRes.state === PAGE_STATES.STEP2_BOUND) {
             deps.sendMessage({ type: 'STEP2_BOUND_REACHED', ...finalRes });
@@ -421,7 +424,13 @@ export function handleContentMessage(message, sender, sendResponse, deps = {}) {
     if (deps.setActiveLoop) {
       deps.setActiveLoop(loop);
     }
-    sendResponse({ success: true, isRunning: loop.isRunning() });
+    sendResponse({
+      success: true,
+      isRunning: loop.isRunning(),
+      state: latestResult?.state,
+      snapshot: latestResult?.snapshot,
+      domSnapshot: latestResult?.domSnapshot,
+    });
     return false;
   }
 

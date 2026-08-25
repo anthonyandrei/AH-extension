@@ -8,7 +8,7 @@ import { PAGE_STATES } from '../content/classifier.js';
 import { readCatalogue } from './catalogue.js';
 import { updateBadge } from './arming.js';
 import { appendLedgerEntry, resolveActiveAlert } from './reporting.js';
-import { steerOwnedTab, handleLoggedOutSuspend } from './tab-manager.js';
+import { steerOwnedTab, handleLoggedOutSuspend, handleUnrecognisedAbort } from './tab-manager.js';
 
 export const DISPOSITIONS = Object.freeze({
   ACQUIRE: 'acquire',
@@ -602,6 +602,16 @@ export async function executePass({
     }
 
     if (pageState === PAGE_STATES.UNRECOGNISED || steerResult?.state === PAGE_STATES.UNRECOGNISED || steerResult?.action === 'abort') {
+      if (steerResult?.action !== 'abort') {
+        await handleUnrecognisedAbort({
+          snapshot: tabResponse?.snapshot || tabResponse?.domSnapshot,
+          storageApi,
+          actionApi,
+          alarmsApi,
+          notificationsApi,
+          now,
+        });
+      }
       const passRecord = {
         id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
         timestamp: now,

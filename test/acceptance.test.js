@@ -9,6 +9,7 @@ import {
   executeStrike,
   evaluateSaveGate,
   applyDispositionsToDom,
+  handleContentMessage,
 } from '../content/classifier.js';
 
 import {
@@ -340,7 +341,15 @@ function createMockElement({
 }
 
 // Mock DOM document helper
-function createMockDocument({ title = 'ArchersHub', elements = [] } = {}) {
+function createMockDocument({
+  title = 'ArchersHub',
+  elements = [],
+  location = {
+    hostname: 'archershub.dlsu.edu.ph',
+    pathname: '/Enlistment_V2/Index',
+    href: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index',
+  },
+} = {}) {
   const elementMap = new Map();
   function register(el) {
     if (el.id) elementMap.set(el.id, el);
@@ -352,6 +361,7 @@ function createMockDocument({ title = 'ArchersHub', elements = [] } = {}) {
 
   return {
     title,
+    location: { ...location },
     body: {
       classList: {
         contains: (c) => false,
@@ -361,6 +371,8 @@ function createMockDocument({ title = 'ArchersHub', elements = [] } = {}) {
     querySelector: (selector) => {
       if (selector.startsWith('#')) return elementMap.get(selector.slice(1)) || null;
       for (const el of elements) {
+        if (selector.startsWith('.') && el.classList?.contains(selector.slice(1))) return el;
+        if (selector === el.tagName?.toLowerCase()) return el;
         const found = el.querySelector ? el.querySelector(selector) : null;
         if (found) return found;
       }
@@ -1467,5 +1479,455 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
       assert.equal(backgroundSource.includes('checkSession'), false);
     });
   });
+
+  describe('Issue #29 Acceptance: Cover tab-pane scoping, toast handling, and Unrecognised aborts', () => {
+    it('Criterion 1: verifies active-pane-scoped queries and actions never match or act on conflicting elements in inactive tab-panes', () => {
+      // Scenario A: Active #STEP2 with inactive #STEP1 containing conflicting visible #btnAdd, radio, fake submit button
+      let btnAddClicks = 0;
+      let fakeBtnClicks = 0;
+      let realEnlistmentClicks = 0;
+
+      const inactiveBtnAdd = createMockElement({
+        id: 'btnAdd',
+        style: { display: 'inline-block' },
+        clickFn: () => btnAddClicks++,
+      });
+      const inactiveRdoOpen = createMockElement({
+        id: 'rdoOpenSection',
+        tagName: 'input',
+      });
+      const inactiveFakeBtn = createMockElement({
+        id: 'btnFakeSubmit',
+        classList: ['common-submit-btn'],
+        clickFn: () => fakeBtnClicks++,
+      });
+      const step1Inactive = createMockElement({
+        id: 'STEP1',
+        classList: ['tab-pane'], // Inactive!
+        children: [inactiveBtnAdd, inactiveRdoOpen, inactiveFakeBtn],
+      });
+
+      const realBtnEnlistment = createMockElement({
+        id: 'btnEnlistment',
+        classList: ['common-submit-btn'],
+        style: { display: 'inline-block' },
+        clickFn: () => realEnlistmentClicks++,
+      });
+      const chk2 = createMockElement({ tagName: 'input', checked: true });
+      const ddl2 = createMockElement({
+        tagName: 'select',
+        value: '501',
+        children: [createMockElement({ tagName: 'option', value: '501', text: 'S11' })],
+      });
+      const row2 = createMockElement({
+        tagName: 'tr',
+        dataset: { courseCreationId: '101', courseCode: 'CSARCH1' },
+        children: [chk2, ddl2],
+      });
+      const tblRegularCourses = createMockElement({
+        id: 'tblRegularCourses',
+        children: [row2],
+      });
+      tblRegularCourses.rows = [row2];
+
+      const step2Active = createMockElement({
+        id: 'STEP2',
+        classList: ['tab-pane', 'active'], // Active!
+        children: [tblRegularCourses, realBtnEnlistment],
+      });
+
+      const step3Inactive = createMockElement({
+        id: 'STEP3',
+        classList: ['tab-pane'],
+      });
+
+      const docA = createMockDocument({
+        elements: [step1Inactive, step2Active, step3Inactive, inactiveBtnAdd, inactiveRdoOpen, inactiveFakeBtn, tblRegularCourses, realBtnEnlistment],
+      });
+
+      // 1. Classification ignores visible #btnAdd in inactive #STEP1 and classifies as Step2Bound
+      const stateA = classifyPageState({ document: docA });
+      assert.equal(stateA.state, PAGE_STATES.STEP2_BOUND);
+
+      // 2. Strike executes against active #STEP2 and clicks #btnEnlistment once, never clicking #btnAdd in inactive #STEP1
+      const strikeRes = executeStrike({
+        dispositions: [
+          { courseCreationId: 101, disposition: 'acquire', wantedSectionCreationId: 501, wantedSectionCode: 'S11' },
+        ],
+        heldCourses: [],
+        document: docA,
+      });
+
+      assert.equal(strikeRes.clicked, true);
+      assert.equal(realEnlistmentClicks, 1);
+      assert.equal(btnAddClicks, 0, 'Inactive pane #btnAdd must never receive a click');
+      assert.equal(fakeBtnClicks, 0, 'Fake submit button must never receive a click');
+
+      // Scenario B: Active #STEP1 with inactive #STEP2 containing #tblRegularCourses and #btnEnlistment
+      let step1BtnAddClicks = 0;
+      let inactiveEnlistmentClicks = 0;
+      let inactiveConfirmClicks = 0;
+
+      const activeBtnAdd = createMockElement({
+        id: 'btnAdd',
+        style: { display: 'inline-block' },
+        clickFn: () => step1BtnAddClicks++,
+      });
+      const activeRdoOpen = createMockElement({
+        id: 'rdoOpenSection',
+        tagName: 'input',
+      });
+      const step1Active = createMockElement({
+        id: 'STEP1',
+        classList: ['tab-pane', 'active'], // Active!
+        children: [activeBtnAdd, activeRdoOpen],
+      });
+
+      const inactiveBtnEnlistment = createMockElement({
+        id: 'btnEnlistment',
+        classList: ['common-submit-btn'],
+        style: { display: 'inline-block' },
+        clickFn: () => inactiveEnlistmentClicks++,
+      });
+      const inactiveBtnConfirm = createMockElement({
+        id: 'btnConfirmEnlistment',
+        classList: ['common-submit-btn'],
+        style: { display: 'inline-block' },
+        clickFn: () => inactiveConfirmClicks++,
+      });
+      const step2Inactive = createMockElement({
+        id: 'STEP2',
+        classList: ['tab-pane'], // Inactive!
+        children: [tblRegularCourses, inactiveBtnEnlistment, inactiveBtnConfirm],
+      });
+
+      const docB = createMockDocument({
+        elements: [step1Active, step2Inactive, activeBtnAdd, activeRdoOpen, tblRegularCourses, inactiveBtnEnlistment, inactiveBtnConfirm],
+      });
+
+      // Classification identifies Step1Unconfigured because #STEP1 is active, ignoring #STEP2's table & buttons
+      const stateB = classifyPageState({ document: docB });
+      assert.equal(stateB.state, PAGE_STATES.STEP1_UNCONFIGURED);
+
+      // Executing state action on Step1 clicks #btnAdd in #STEP1, never touching inactive #STEP2 buttons
+      const actionResB = executeStateAction({ document: docB });
+      assert.equal(actionResB.success, true);
+      assert.equal(actionResB.action, 'open_section_and_add');
+      assert.equal(step1BtnAddClicks, 1);
+      assert.equal(inactiveEnlistmentClicks, 0);
+      assert.equal(inactiveConfirmClicks, 0);
+
+      // Scenario C: Payment tab carrying .tab-pane.active (#PayatCampus / #PayatBank / #Online) while Step 1, 2, 3 are inactive
+      const payAtCampus = createMockElement({ id: 'PayatCampus', classList: ['tab-pane', 'active'] });
+      const payAtBank = createMockElement({ id: 'PayatBank', classList: ['tab-pane', 'active'] });
+      const online = createMockElement({ id: 'Online', classList: ['tab-pane', 'active'] });
+      const docC = createMockDocument({
+        elements: [payAtCampus, payAtBank, online, step1Inactive, step2Inactive, step3Inactive],
+      });
+
+      // Classifies strictly as Unrecognised rather than falsely matching a step pane
+      const stateC = classifyPageState({ document: docC });
+      assert.equal(stateC.state, PAGE_STATES.UNRECOGNISED);
+    });
+
+    it('Criterion 2: introduces toast elements into the DOM and verifies Page State classification is unaffected and no action is triggered by the toast', async () => {
+      const successToast = createMockElement({
+        id: 'toast-container',
+        classList: ['toast-top-right'],
+        children: [
+          createMockElement({
+            classList: ['toast', 'toast-success'],
+            text: 'Course selection saved successfully.',
+          }),
+        ],
+      });
+
+      const errorToast = createMockElement({
+        id: 'toast-container',
+        classList: ['toast-top-right'],
+        children: [
+          createMockElement({
+            classList: ['toast', 'toast-error'],
+            text: 'Section capacity is full ! Please choose another section.',
+          }),
+        ],
+      });
+
+      const warningToast = createMockElement({
+        id: 'toast-container',
+        classList: ['toast-top-right'],
+        children: [
+          createMockElement({
+            classList: ['toast', 'toast-warning'],
+            text: 'Session will expire soon.',
+          }),
+        ],
+      });
+
+      // 1. Step1Unconfigured + Success Toast: remains Step1Unconfigured, action is open_section_and_add
+      const step1 = createMockElement({ id: 'STEP1', classList: ['tab-pane', 'active'] });
+      let btnAddClicked = false;
+      const btnAdd = createMockElement({
+        id: 'btnAdd',
+        style: { display: 'inline-block' },
+        clickFn: () => { btnAddClicked = true; },
+      });
+      const rdoOpen = createMockElement({ id: 'rdoOpenSection', tagName: 'input' });
+
+      const docStep1WithToast = createMockDocument({
+        elements: [step1, btnAdd, rdoOpen, successToast],
+      });
+
+      const state1 = classifyPageState({ document: docStep1WithToast });
+      assert.equal(state1.state, PAGE_STATES.STEP1_UNCONFIGURED);
+
+      const act1 = executeStateAction({ document: docStep1WithToast });
+      assert.equal(act1.success, true);
+      assert.equal(act1.action, 'open_section_and_add');
+      assert.equal(btnAddClicked, true);
+
+      // 2. Step2Bound + Error Toast: remains Step2Bound, Save Gate and strike execute normally
+      let enlistmentClicks = 0;
+      const step2 = createMockElement({ id: 'STEP2', classList: ['tab-pane', 'active'] });
+      const btnEnlistment = createMockElement({
+        id: 'btnEnlistment',
+        style: { display: 'inline-block' },
+        clickFn: () => enlistmentClicks++,
+      });
+      const chk = createMockElement({ tagName: 'input', checked: true });
+      const ddl = createMockElement({
+        tagName: 'select',
+        value: '501',
+        children: [createMockElement({ tagName: 'option', value: '501', text: 'S11' })],
+      });
+      const row = createMockElement({
+        tagName: 'tr',
+        dataset: { courseCreationId: '101', courseCode: 'CSARCH1' },
+        children: [chk, ddl],
+      });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [row] });
+      tbl.rows = [row];
+
+      const docStep2WithErrorToast = createMockDocument({
+        elements: [step2, tbl, btnEnlistment, errorToast],
+      });
+
+      const state2 = classifyPageState({ document: docStep2WithErrorToast });
+      assert.equal(state2.state, PAGE_STATES.STEP2_BOUND);
+
+      const strikeRes = executeStrike({
+        dispositions: [
+          { courseCreationId: 101, disposition: 'acquire', wantedSectionCreationId: 501, wantedSectionCode: 'S11' },
+        ],
+        heldCourses: [],
+        document: docStep2WithErrorToast,
+      });
+      assert.equal(strikeRes.clicked, true);
+      assert.equal(enlistmentClicks, 1);
+
+      // 3. Settling loader + Toast: remains Settling (wait action)
+      const loader = createMockElement({ classList: ['full-page-loader'], style: { display: 'block' } });
+      const docSettlingWithToast = createMockDocument({
+        elements: [loader, warningToast],
+      });
+      const state3 = classifyPageState({ document: docSettlingWithToast });
+      assert.equal(state3.state, PAGE_STATES.SETTLING);
+
+      // 4. End-to-end executePass with toast in DOM: completes pass and updates held courses
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000000, startedAt: 1000000 },
+        plan: { subjects: [{ courseCreationId: 101, sectionCreationId: 501 }] },
+        ownedTabId: 101,
+        lastCompletePassAt: 1000000,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      // Tabs sendMessage connected to docStep2WithErrorToast
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, ...classifyPageState({ document: docStep2WithErrorToast }) };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          return executeStrike({
+            dispositions: msg.dispositions,
+            heldCourses: msg.heldCourses,
+            document: docStep2WithErrorToast,
+          });
+        }
+        return { success: true };
+      };
+
+      const mockFetch = createCatalogueMockFetch({
+        courses: [
+          {
+            courseCreationId: 101,
+            courseCode: 'CSARCH1',
+            heldSectionCreationId: null,
+            sections: [{ sectionCreationId: 501, sectionName: 'S11' }],
+          },
+        ],
+        postCourses: [
+          {
+            courseCreationId: 101,
+            courseCode: 'CSARCH1',
+            heldSectionCreationId: 501,
+            sections: [{ sectionCreationId: 501, sectionName: 'S11' }],
+          },
+        ],
+      });
+
+      const passRes = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 1050000,
+      });
+
+      assert.equal(passRes.isComplete, true);
+      assert.equal(passRes.strikePerformed, true);
+      assert.equal(passRes.state, 'complete'); // Every requested subject holding wanted section
+      assert.equal(storage._getStore().vigil.state, 'complete');
+      assert.equal(action._getBadge().text, '✓');
+      assert.equal(action._getBadge().color, '#10B981');
+    });
+
+    it('Criterion 3: constructs a genuinely unrecognised DOM structure, verifies it classifies as Unrecognised, and confirms the Vigil aborts with DOM snapshot evidence captured', async () => {
+      // 1. Fixture 1: Post-Final-Submit locked page
+      const lockedHtml = '<div id="divEnlistmentLocked" class="locked-container"><h3>Enlistment Locked</h3><p>Your enlistment has been committed via Final Submit.</p></div>';
+      const lockedContainer = createMockElement({
+        id: 'divEnlistmentLocked',
+        classList: ['locked-container'],
+        innerHTML: '<h3>Enlistment Locked</h3><p>Your enlistment has been committed via Final Submit.</p>',
+      });
+      const docLocked = createMockDocument({
+        title: 'ArchersHub - Enlistment Locked',
+        elements: [lockedContainer],
+      });
+      docLocked.documentElement.outerHTML = `<html><head><title>ArchersHub - Enlistment Locked</title></head><body>${lockedHtml}</body></html>`;
+
+      const stateRes1 = classifyPageState({ document: docLocked });
+      assert.equal(stateRes1.state, PAGE_STATES.UNRECOGNISED);
+      assert.ok(stateRes1.snapshot);
+      assert.match(stateRes1.snapshot.html, /Enlistment Locked/);
+      assert.equal(stateRes1.snapshot.title, 'ArchersHub - Enlistment Locked');
+
+      const actionRes1 = executeStateAction({ document: docLocked });
+      assert.equal(actionRes1.success, false);
+      assert.equal(actionRes1.action, 'abort');
+      assert.equal(actionRes1.state, PAGE_STATES.UNRECOGNISED);
+      assert.ok(actionRes1.snapshot);
+
+      // 2. Fixture 2: System maintenance / unexpected modal
+      const maintenanceHtml = '<div id="sysMaintenanceModal" class="modal-dialog"><div class="modal-content"><div class="modal-title">System Maintenance</div><div class="modal-body">ArchersHub registrar services are offline.</div></div></div>';
+      const maintenanceModal = createMockElement({
+        id: 'sysMaintenanceModal',
+        classList: ['modal-dialog'],
+        innerHTML: '<div class="modal-content"><div class="modal-title">System Maintenance</div><div class="modal-body">ArchersHub registrar services are offline.</div></div>',
+      });
+      const docMaintenance = createMockDocument({
+        title: 'ArchersHub - Maintenance',
+        elements: [maintenanceModal],
+      });
+      docMaintenance.documentElement.outerHTML = `<html><head><title>ArchersHub - Maintenance</title></head><body>${maintenanceHtml}</body></html>`;
+
+      const stateRes2 = classifyPageState({ document: docMaintenance });
+      assert.equal(stateRes2.state, PAGE_STATES.UNRECOGNISED);
+      assert.match(stateRes2.snapshot.html, /System Maintenance/);
+
+      // 3. End-to-End Vigil Abort execution via executePass against Owned Tab hosting docLocked
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000000, startedAt: 1000000 },
+        plan: { subjects: [{ courseCreationId: 101, sectionCreationId: 501 }] },
+        ownedTabId: 101,
+        lastCompletePassAt: 1000000,
+      });
+      const alarms = createMockAlarms();
+      alarms.create('vigil_pass', { delayInMinutes: 0.1 });
+      alarms.create('owned_tab_reload', { delayInMinutes: 3 });
+
+      const action = createMockAction();
+      action.setBadgeText({ text: '1' });
+      action.setBadgeBackgroundColor({ color: '#4285F4' });
+
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      // Content message listener receives CLASSIFY_PAGE & STEER_TAB on Owned Tab
+      tabs.sendMessage = async (id, msg) => {
+        let response = null;
+        handleContentMessage(msg, {}, (res) => { response = res; }, {
+          document: docLocked,
+          window: null,
+          location: { hostname: 'archershub.dlsu.edu.ph', pathname: '/Enlistment_V2/Index', href: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' },
+        });
+        return response;
+      };
+
+      const mockFetch = createCatalogueMockFetch({
+        courses: [
+          {
+            courseCreationId: 101,
+            courseCode: 'CSARCH1',
+            heldSectionCreationId: null,
+            sections: [{ sectionCreationId: 501, sectionName: 'S11' }],
+          },
+        ],
+      });
+
+      const passRes = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 1050000,
+      });
+
+      // Acceptance criterion 3 verifications:
+      // (a) Pass returns aborted state
+      assert.equal(passRes.isComplete, false);
+      assert.equal(passRes.state, 'aborted');
+
+      // (b) Vigil state is set to aborted
+      const finalStore = storage._getStore();
+      assert.equal(finalStore.vigil.state, 'aborted');
+
+      // (c) Captured DOM snapshot evidence is persisted in storage
+      assert.ok(finalStore.lastAbortedSnapshot);
+      assert.match(finalStore.lastAbortedSnapshot.html, /Enlistment Locked/);
+      assert.equal(finalStore.lastAbortedSnapshot.title, 'ArchersHub - Enlistment Locked');
+      assert.equal(finalStore.lastAbortedSnapshot.url, 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index');
+
+      // (d) Badge is set to X dark red (#991B1B)
+      assert.equal(action._getBadge().text, 'X');
+      assert.equal(action._getBadge().color, '#991B1B');
+
+      // (e) Alert tier ledger entry created in Run Report
+      const ledger = finalStore.ledger || [];
+      const abortEntry = ledger.find((e) => e.type === 'aborted');
+      assert.ok(abortEntry, 'Abort entry must be present in ledger');
+      assert.equal(abortEntry.tier, 'alert');
+      assert.equal(abortEntry.title, 'Vigil aborted');
+      assert.match(abortEntry.cause, /unrecognised page state/i);
+
+      // (f) Alert notification sent
+      const notifs = notifications._getList();
+      assert.equal(notifs.length, 1);
+      assert.match(notifs[0].title, /aborted/i);
+
+      // (g) Reload alarm cleared and Owned Tab left open as evidence
+      assert.equal(alarms._getAlarms().has('owned_tab_reload'), false);
+      const ownedTab = await tabs.get(101);
+      assert.ok(ownedTab, 'Owned Tab must remain open as evidence');
+    });
+  });
 });
+
 
