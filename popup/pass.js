@@ -751,7 +751,7 @@ export async function executePass({
   const courses = Array.isArray(catalogue.courses) ? catalogue.courses : [];
   const reconciliation = reconcilePlan({ plan, courses });
 
-  // 5. Detect Reset Conditions
+  // 5. Detect Reset Conditions & Lost Slots on initial catalogue read
   const requestedCourseIds = Array.isArray(plan?.subjects)
     ? plan.subjects.map((s) => s.courseCreationId)
     : [];
@@ -765,10 +765,39 @@ export async function executePass({
       : [];
   }
 
+  const previousHeldSnapshot = data?.lastHeldSnapshot || vigil?.previousHeldSnapshot;
+  const previousSectionsSnapshot = data?.lastSectionsSnapshot || vigil?.previousSectionsSnapshot;
+
+  if (previousHeldSnapshot) {
+    const diffResult = diffHeldCourses({
+      preHeldSnapshot: previousHeldSnapshot,
+      postHeldSnapshot: currentHeldSnapshot,
+      courses,
+    });
+
+    if (diffResult.isShrunk) {
+      for (const lost of diffResult.lostSlots) {
+        await appendLedgerEntry({
+          entry: {
+            tier: 'notice',
+            type: 'lost_slot',
+            title: 'Lost Slot',
+            cause: `Held slot for ${lost.courseCode} was lost during switch`,
+            timestamp: now,
+          },
+          storageApi,
+          notificationsApi,
+          alarmsApi,
+          now,
+        });
+      }
+    }
+  }
+
   const resetResult = detectResetConditions({
-    previousHeldSnapshot: data?.lastHeldSnapshot || vigil?.previousHeldSnapshot,
+    previousHeldSnapshot,
     currentHeldSnapshot,
-    previousSectionsSnapshot: data?.lastSectionsSnapshot || vigil?.previousSectionsSnapshot,
+    previousSectionsSnapshot,
     currentSectionsSnapshot,
     requestedCourseIds,
   });
@@ -940,7 +969,77 @@ export async function executePass({
       postCatalogue = { loggedIn: false, error: err?.message };
     }
 
-    const postCourses = Array.isArray(postCatalogue?.courses) ? postCatalogue.courses : courses;
+    const isPostReadSuccess = Boolean(
+      postCatalogue && postCatalogue.loggedIn !== false && Array.isArray(postCatalogue.courses)
+    );
+
+    if (!isPostReadSuccess) {
+      const errorStatus = postCatalogue?.status;
+      if (errorStatus === 429 || errorStatus === 403) {
+        updatedVigil.rateLimited = true;
+      }
+
+      const nextDelay = computeNextPassDelay({
+        lastChangeAt: updatedVigil.lastChangeAt,
+        now,
+        rateLimited: updatedVigil.rateLimited,
+      });
+
+      updatedVigil.nextFireTime = now + nextDelay;
+      updatedVigil.previousHeldSnapshot = currentHeldSnapshot;
+      updatedVigil.previousSectionsSnapshot = currentSectionsSnapshot;
+
+      if (storageApi?.set) {
+        await storageApi.set({
+          vigil: updatedVigil,
+          reconciliation,
+          lastHeldSnapshot: currentHeldSnapshot,
+          lastSectionsSnapshot: currentSectionsSnapshot,
+        });
+      }
+
+      updateBadge({
+        state: 'watching',
+        unresolvedCount: reconciliation.unresolvedCount,
+        actionApi,
+      });
+
+      const passRecord = {
+        id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: now,
+        state: PAGE_STATES.STEP2_BOUND,
+        complete: false,
+        strikePerformed: true,
+        verified: false,
+        interval: nextDelay,
+        unresolvedCount: reconciliation.unresolvedCount,
+        allSatisfied: false,
+        dispositions: reconciliation.dispositions,
+        error: errorStatus || postCatalogue?.error || 'post_write_read_failed',
+        summary: 'Strike executed — post-write catalogue read failed (unverified)',
+      };
+
+      await appendPassTail({ passRecord, storageApi });
+
+      if (alarmsApi?.create) {
+        alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
+      }
+
+      return {
+        isComplete: false,
+        state: 'watching',
+        strikePerformed: true,
+        verified: false,
+        unresolvedCount: reconciliation.unresolvedCount,
+        allSatisfied: false,
+        reason: 'post_write_read_failed',
+        error: errorStatus || postCatalogue?.error,
+        reconciliation,
+      };
+    }
+
+    // Post-write read succeeded: verify new state against postCatalogue.courses
+    const postCourses = postCatalogue.courses;
     const postHeldSnapshot = {};
     const postSectionsSnapshot = {};
     for (const c of postCourses) {
@@ -1026,6 +1125,7 @@ export async function executePass({
         unresolvedCount: 0,
         allSatisfied: true,
         strikePerformed: true,
+        verified: true,
         dispositions: postReconciliation.dispositions,
         summary: 'Strike executed: Complete — all subjects satisfied',
       };
@@ -1036,6 +1136,7 @@ export async function executePass({
         isComplete: true,
         state: 'complete',
         strikePerformed: true,
+        verified: true,
         unresolvedCount: 0,
         allSatisfied: true,
         reconciliation: postReconciliation,
@@ -1073,6 +1174,7 @@ export async function executePass({
       state: PAGE_STATES.STEP2_BOUND,
       complete: true,
       strikePerformed: true,
+      verified: true,
       interval: nextDelay,
       unresolvedCount: postReconciliation.unresolvedCount,
       allSatisfied: false,
@@ -1090,6 +1192,7 @@ export async function executePass({
       isComplete: true,
       state: 'watching',
       strikePerformed: true,
+      verified: true,
       unresolvedCount: postReconciliation.unresolvedCount,
       allSatisfied: false,
       reconciliation: postReconciliation,

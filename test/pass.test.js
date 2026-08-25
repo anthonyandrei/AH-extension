@@ -1153,6 +1153,374 @@ describe('pass module', () => {
       assert.ok((await alarms.get('vigil_pass')));
     });
 
+    it('on actionable dispositions when strike clicks but post-write read fails: records unverified pass in passTail, does not mark complete, leaves state watching, does not update lastCompletePassAt, and preserves pre-strike snapshot', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' },
+          ],
+        },
+        ownedTabId: 101,
+        lastCompletePassAt: 1000,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          return { success: true, clicked: true, saveGateApproved: true };
+        }
+        return { success: true };
+      };
+
+      let fetchCallCount = 0;
+      const mockFetch = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          fetchCallCount++;
+          // First read before strike succeeds: shell params returned
+          // Second read after strike fails: returns 500 error
+          if (fetchCallCount > 1) {
+            return {
+              ok: false,
+              status: 500,
+              text: async () => 'Internal Server Error',
+            };
+          }
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `
+              <input id="hdfAcademicSessionId" value="10" />
+              <input id="hdfRuleAllocationId" value="20" />
+              <input id="hdfEnlistmentRuleId" value="30" />
+            `,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: 501, IS_REGISTERED: 1 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'G02 {Avail. Slots: 5}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 5000,
+      });
+
+      // Pass result must NOT be marked complete or satisfied
+      assert.equal(result.isComplete, false);
+      assert.equal(result.verified, false);
+      assert.equal(result.strikePerformed, true);
+      assert.equal(result.state, 'watching');
+      assert.equal(result.allSatisfied, false);
+      assert.equal(result.reason, 'post_write_read_failed');
+
+      const store = storage._getStore();
+      // Vigil state remains watching, NOT complete
+      assert.equal(store.vigil.state, 'watching');
+      // Badge remains blue watching count, NOT ✓
+      assert.equal(action._getBadge().text, '1');
+      assert.equal(action._getBadge().color, '#4285F4');
+
+      // lastCompletePassAt was NOT updated (remains 1000)
+      assert.equal(store.lastCompletePassAt, 1000);
+
+      // Pre-strike snapshot preserved in lastHeldSnapshot
+      assert.equal(store.lastHeldSnapshot[101], 501);
+
+      // Pass tail recorded unverified outcome
+      assert.equal(store.passTail.length, 1);
+      assert.equal(store.passTail[0].complete, false);
+      assert.equal(store.passTail[0].verified, false);
+      assert.equal(store.passTail[0].strikePerformed, true);
+      assert.match(store.passTail[0].summary, /unverified|failed/i);
+
+      // Next pass scheduled to retry
+      assert.ok((await alarms.get('vigil_pass')));
+    });
+
+    it('after an unverified strike, subsequent pass with successful read accurately detects a Lost Slot that occurred during the strike', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' },
+          ],
+        },
+        ownedTabId: 101,
+        lastCompletePassAt: 1000,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          return { success: true, clicked: true, saveGateApproved: true };
+        }
+        return { success: true };
+      };
+
+      // PASS 1: Strike clicks, but post-write read fails with 500
+      let pass1FetchCount = 0;
+      const mockFetchPass1 = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          pass1FetchCount++;
+          if (pass1FetchCount > 1) {
+            return { ok: false, status: 500 };
+          }
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `<input id="hdfAcademicSessionId" value="10" /><input id="hdfRuleAllocationId" value="20" /><input id="hdfEnlistmentRuleId" value="30" />`,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: 501, IS_REGISTERED: 1 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'G02 {Avail. Slots: 5}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetchPass1,
+        now: 5000,
+      });
+
+      // PASS 2: Runs 2s later. Pre-strike catalogue read succeeds, showing CS101 held is now null (Lost Slot)
+      const mockFetchPass2 = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `<input id="hdfAcademicSessionId" value="10" /><input id="hdfRuleAllocationId" value="20" /><input id="hdfEnlistmentRuleId" value="30" />`,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: null, IS_REGISTERED: 0 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const pass2Result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetchPass2,
+        now: 7000,
+      });
+
+      assert.equal(pass2Result.isComplete, true);
+      assert.equal(pass2Result.state, 'watching');
+
+      const store = storage._getStore();
+      // Notice for Lost Slot must have been logged!
+      const ledger = store.ledger || [];
+      const lostEntry = ledger.find((e) => e.type === 'lost_slot');
+      assert.ok(lostEntry, 'Lost Slot must be logged to event ledger on subsequent pass');
+      assert.equal(lostEntry.tier, 'notice');
+      assert.match(lostEntry.cause, /CS101/);
+
+      // Notification fired for Lost Slot
+      const notifs = notifications._getList();
+      assert.ok(notifs.some((n) => /Lost Slot/i.test(n.title)));
+    });
+
+    it('after an unverified strike, subsequent pass with successful read accurately detects completed switch', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' },
+          ],
+        },
+        ownedTabId: 101,
+        lastCompletePassAt: 1000,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          return { success: true, clicked: true, saveGateApproved: true };
+        }
+        return { success: true };
+      };
+
+      // PASS 1: Strike clicks, but post-write read fails
+      let pass1FetchCount = 0;
+      const mockFetchPass1 = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          pass1FetchCount++;
+          if (pass1FetchCount > 1) {
+            return { ok: false, status: 500 };
+          }
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `<input id="hdfAcademicSessionId" value="10" /><input id="hdfRuleAllocationId" value="20" /><input id="hdfEnlistmentRuleId" value="30" />`,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: 501, IS_REGISTERED: 1 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'G02 {Avail. Slots: 5}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetchPass1,
+        now: 5000,
+      });
+
+      // PASS 2: Pre-strike catalogue read succeeds, showing CS101 held at 502 (switch succeeded!)
+      const mockFetchPass2 = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `<input id="hdfAcademicSessionId" value="10" /><input id="hdfRuleAllocationId" value="20" /><input id="hdfEnlistmentRuleId" value="30" />`,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: 502, IS_REGISTERED: 1 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'G02 {Avail. Slots: 5}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const pass2Result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetchPass2,
+        now: 7000,
+      });
+
+      assert.equal(pass2Result.isComplete, true);
+      assert.equal(pass2Result.state, 'complete');
+      assert.equal(pass2Result.allSatisfied, true);
+
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'complete');
+      assert.equal(action._getBadge().text, '✓');
+      assert.equal(action._getBadge().color, '#10B981');
+    });
+
     it('held-but-never-requested Section survives across strike and post-write diff', async () => {
       const storage = createMockStorage({
         vigil: { state: 'watching', lastChangeAt: 1000 },

@@ -1229,4 +1229,150 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
       assert.doesNotMatch(ledger[0].cause, /scheduled/i);
     });
   });
+
+  describe('Issue #26 Acceptance: Report post-write catalogue read failures instead of reusing pre-write snapshots', () => {
+    it('failed post-write read does not substitute pre-write snapshot, records unverified outcome in Run Report, does not mark Pass/Vigil satisfied, and subsequent pass detects Lost Slot or completion', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000000, startedAt: 1000000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CSARCH1', sectionCreationId: 502, sectionCode: 'S12' },
+          ],
+        },
+        ownedTabId: 101,
+        lastCompletePassAt: 1000000,
+        lastHeldSnapshot: { 101: 501 },
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        if (msg.type === 'EXECUTE_STRIKE') return { success: true, clicked: true, saveGateApproved: true };
+        return { success: true };
+      };
+
+      // 1. Pass 1: Strike executed, but post-write read fails (HTTP 500)
+      let pass1FetchCount = 0;
+      const mockFetchFail = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          pass1FetchCount++;
+          if (pass1FetchCount > 1) {
+            return { ok: false, status: 500, text: async () => '500 Internal Error' };
+          }
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `<input id="hdfAcademicSessionId" value="44" /><input id="hdfRuleAllocationId" value="12" /><input id="hdfEnlistmentRuleId" value="34" />`,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CSARCH1', SECTION_CREATION_ID: 501, IS_REGISTERED: 1 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'S12 {Avail. Slots: 5}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const pass1Result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetchFail,
+        now: 1050000,
+      });
+
+      // Acceptance criterion 1: A failed post-write catalogue read does not substitute the pre-write snapshot as the post-write catalogue.
+      // Acceptance criterion 2: A failed post-write read records an unverified outcome in the Run Report rather than reporting a clean, zero-diff Pass.
+      // Acceptance criterion 3: A failed post-write read does not mark the Pass or Vigil as satisfied or verified.
+      assert.equal(pass1Result.isComplete, false);
+      assert.equal(pass1Result.verified, false);
+      assert.equal(pass1Result.strikePerformed, true);
+      assert.equal(pass1Result.state, 'watching');
+      assert.equal(pass1Result.allSatisfied, false);
+      assert.equal(pass1Result.reason, 'post_write_read_failed');
+
+      const storeAfterPass1 = storage._getStore();
+      assert.equal(storeAfterPass1.vigil.state, 'watching');
+      assert.equal(storeAfterPass1.lastCompletePassAt, 1000000); // Not updated!
+      assert.equal(storeAfterPass1.lastHeldSnapshot[101], 501); // Pre-strike snapshot preserved
+
+      const passTail = storeAfterPass1.passTail || [];
+      assert.equal(passTail.length, 1);
+      assert.equal(passTail[0].complete, false);
+      assert.equal(passTail[0].verified, false);
+      assert.equal(passTail[0].strikePerformed, true);
+      assert.match(passTail[0].summary, /unverified|failed/i);
+
+      // 2. Pass 2: Runs next tick. Successful read reveals slot was lost during the strike!
+      const mockFetchLostSlot = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `<input id="hdfAcademicSessionId" value="44" /><input id="hdfRuleAllocationId" value="12" /><input id="hdfEnlistmentRuleId" value="34" />`,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CSARCH1', SECTION_CREATION_ID: null, IS_REGISTERED: 0 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const pass2Result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetchLostSlot,
+        now: 1052000,
+      });
+
+      // Acceptance criterion 4: Automated tests cover both cases: a post-write read failure produces the distinct unverified outcome, and a successful post-write read still detects Lost Slots and completed switches.
+      assert.equal(pass2Result.isComplete, true);
+      assert.equal(pass2Result.state, 'watching');
+
+      const storeAfterPass2 = storage._getStore();
+      const ledger = storeAfterPass2.ledger || [];
+      const lostEntry = ledger.find((e) => e.type === 'lost_slot');
+      assert.ok(lostEntry, 'Lost slot must be detected and logged to ledger on subsequent pass');
+      assert.equal(lostEntry.tier, 'notice');
+      assert.match(lostEntry.cause, /CSARCH1/);
+    });
+  });
 });
