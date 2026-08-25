@@ -5,7 +5,9 @@ import {
   parseSectionName,
   buildCourseList,
   sectionRequestBody,
-  readCatalogue
+  readCatalogue,
+  ARCHERSHUB_BASE_URL,
+  extractUniqueCourses
 } from '../popup/catalogue.js';
 
 describe('extractShellParams', () => {
@@ -608,5 +610,71 @@ describe('readCatalogue', () => {
       [5, 12, 0]
     );
     assert.deepEqual(c2.sections, []);
+  });
+
+  it('uses ARCHERSHUB_BASE_URL (https://archershub.dlsu.edu.ph) as default and supports custom baseUrl', async () => {
+    assert.equal(ARCHERSHUB_BASE_URL, 'https://archershub.dlsu.edu.ph');
+
+    const defaultUrls = [];
+    const fakeDefaultFetch = async (url) => {
+      defaultUrls.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        text: async () => '<input id="hdfAcademicSessionId" value="1" /><input id="hdfRuleAllocationId" value="2" /><input id="hdfEnlistmentRuleId" value="3" />',
+        json: async () => ({})
+      };
+    };
+
+    await readCatalogue(fakeDefaultFetch);
+    assert.ok(defaultUrls.length >= 1);
+    assert.equal(defaultUrls[0], 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index');
+
+    const customUrls = [];
+    const fakeCustomFetch = async (url) => {
+      customUrls.push(String(url));
+      return {
+        ok: true,
+        status: 200,
+        text: async () => '<input id="hdfAcademicSessionId" value="1" /><input id="hdfRuleAllocationId" value="2" /><input id="hdfEnlistmentRuleId" value="3" />',
+        json: async () => ({})
+      };
+    };
+
+    await readCatalogue(fakeCustomFetch, 'https://test.archershub.local');
+    assert.ok(customUrls.length >= 1);
+    assert.equal(customUrls[0], 'https://test.archershub.local/Enlistment_V2/Index');
+  });
+});
+
+describe('extractUniqueCourses', () => {
+  it('extracts unique courses across categories and preserves gridType', () => {
+    const allCourseData = {
+      CourseDetails: [
+        { COURSE_CREATION_ID: 10, COURSE_CODE: 'CS1' },
+        { COURSE_CREATION_ID: 20, COURSE_CODE: 'CS2' }
+      ],
+      ElectiveCourseDetails: [
+        { COURSE_CREATION_ID: 20, COURSE_CODE: 'CS2' }, // duplicate
+        { COURSE_CREATION_ID: 30, COURSE_CODE: 'CS3' }
+      ],
+      GlobelElectiveCourseDetails: [
+        { COURSE_CREATION_ID: 40, COURSE_CODE: 'CS4' }
+      ]
+    };
+
+    const unique = extractUniqueCourses(allCourseData);
+
+    assert.equal(unique.length, 4);
+    assert.deepEqual(unique[0], { course: { COURSE_CREATION_ID: 10, COURSE_CODE: 'CS1' }, gridType: 0 });
+    assert.deepEqual(unique[1], { course: { COURSE_CREATION_ID: 20, COURSE_CODE: 'CS2' }, gridType: 0 });
+    assert.deepEqual(unique[2], { course: { COURSE_CREATION_ID: 30, COURSE_CODE: 'CS3' }, gridType: 0 });
+    assert.deepEqual(unique[3], { course: { COURSE_CREATION_ID: 40, COURSE_CODE: 'CS4' }, gridType: 1 });
+  });
+
+  it('returns empty array for invalid or empty input', () => {
+    assert.deepEqual(extractUniqueCourses(null), []);
+    assert.deepEqual(extractUniqueCourses(undefined), []);
+    assert.deepEqual(extractUniqueCourses({}), []);
   });
 });

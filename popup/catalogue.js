@@ -87,19 +87,21 @@ export function parseSectionName(name) {
   };
 }
 
+export const ARCHERSHUB_BASE_URL = 'https://archershub.dlsu.edu.ph';
+
 /**
- * Builds CourseList array for section requests from GetAllCourseSectionData response.
+ * Extracts deduplicated list of courses across all categories from GetAllCourseSectionData response.
  *
  * @param {object} allCourseData
- * @returns {Array<{ COURSE_CREATION_ID: number, CROSS_OFFER: number, GRID_TYPE: number }>}
+ * @returns {Array<{ course: object, gridType: number }>}
  */
-export function buildCourseList(allCourseData) {
+export function extractUniqueCourses(allCourseData) {
   if (!allCourseData || typeof allCourseData !== 'object') {
     return [];
   }
 
-  const courseList = [];
-  const seen = new Set();
+  const result = [];
+  const seenIds = new Set();
 
   for (const { key, gridType } of CATEGORIES) {
     const items = allCourseData[key];
@@ -108,30 +110,43 @@ export function buildCourseList(allCourseData) {
         if (!course || course.COURSE_CREATION_ID === undefined || course.COURSE_CREATION_ID === null) {
           continue;
         }
-        if (seen.has(course.COURSE_CREATION_ID)) {
+        if (seenIds.has(course.COURSE_CREATION_ID)) {
           continue;
         }
-        seen.add(course.COURSE_CREATION_ID);
-
-        let crossOffer;
-        if (gridType > 0) {
-          crossOffer = 1;
-        } else if (course.IS_ONE_WAY_TWO_WAY === 1) {
-          crossOffer = 1;
-        } else {
-          crossOffer = course.CROSS_OFFER !== undefined && course.CROSS_OFFER !== null ? course.CROSS_OFFER : 0;
-        }
-
-        courseList.push({
-          COURSE_CREATION_ID: course.COURSE_CREATION_ID,
-          CROSS_OFFER: crossOffer,
-          GRID_TYPE: gridType
-        });
+        seenIds.add(course.COURSE_CREATION_ID);
+        result.push({ course, gridType });
       }
     }
   }
 
-  return courseList;
+  return result;
+}
+
+/**
+ * Builds CourseList array for section requests from GetAllCourseSectionData response.
+ *
+ * @param {object} allCourseData
+ * @returns {Array<{ COURSE_CREATION_ID: number, CROSS_OFFER: number, GRID_TYPE: number }>}
+ */
+export function buildCourseList(allCourseData) {
+  const unique = extractUniqueCourses(allCourseData);
+
+  return unique.map(({ course, gridType }) => {
+    let crossOffer;
+    if (gridType > 0) {
+      crossOffer = 1;
+    } else if (course.IS_ONE_WAY_TWO_WAY === 1) {
+      crossOffer = 1;
+    } else {
+      crossOffer = course.CROSS_OFFER !== undefined && course.CROSS_OFFER !== null ? course.CROSS_OFFER : 0;
+    }
+
+    return {
+      COURSE_CREATION_ID: course.COURSE_CREATION_ID,
+      CROSS_OFFER: crossOffer,
+      GRID_TYPE: gridType
+    };
+  });
 }
 
 /**
@@ -160,10 +175,11 @@ export function sectionRequestBody(courseList, academicSessionId) {
  * Reads catalogue data by fetching shell, courses, and section data sequentially.
  *
  * @param {typeof fetch} [fetchImpl=fetch]
+ * @param {string} [baseUrl=ARCHERSHUB_BASE_URL]
  * @returns {Promise<{ loggedIn: boolean, academicSessionId?: string, courses?: Array<object> }>}
  */
-export async function readCatalogue(fetchImpl = fetch) {
-  const shellResponse = await fetchImpl('/Enlistment_V2/Index', {
+export async function readCatalogue(fetchImpl = fetch, baseUrl = ARCHERSHUB_BASE_URL) {
+  const shellResponse = await fetchImpl(`${baseUrl}/Enlistment_V2/Index`, {
     credentials: 'include'
   });
 
@@ -180,7 +196,7 @@ export async function readCatalogue(fetchImpl = fetch) {
     enlistmentRuleId: shellParams.enlistmentRuleId
   });
 
-  const allCourseResponse = await fetchImpl('/Enlistment_V2/GetAllCourseSectionData/', {
+  const allCourseResponse = await fetchImpl(`${baseUrl}/Enlistment_V2/GetAllCourseSectionData/`, {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -194,7 +210,7 @@ export async function readCatalogue(fetchImpl = fetch) {
 
   const sectionBody = sectionRequestBody(courseList, shellParams.academicSessionId);
 
-  const sectionResponse = await fetchImpl('/Enlistment_V2/GetCourseWiseSectionData/', {
+  const sectionResponse = await fetchImpl(`${baseUrl}/Enlistment_V2/GetCourseWiseSectionData/`, {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -223,27 +239,9 @@ export async function readCatalogue(fetchImpl = fetch) {
     }
   }
 
-  const rawCourses = [];
-  const seenIds = new Set();
+  const uniqueCourses = extractUniqueCourses(allCourseData);
 
-  for (const { key } of CATEGORIES) {
-    const items = allCourseData?.[key];
-    if (Array.isArray(items)) {
-      for (const c of items) {
-        if (
-          c &&
-          c.COURSE_CREATION_ID !== undefined &&
-          c.COURSE_CREATION_ID !== null &&
-          !seenIds.has(c.COURSE_CREATION_ID)
-        ) {
-          seenIds.add(c.COURSE_CREATION_ID);
-          rawCourses.push(c);
-        }
-      }
-    }
-  }
-
-  const courses = rawCourses.map((c) => ({
+  const courses = uniqueCourses.map(({ course: c }) => ({
     courseCreationId: c.COURSE_CREATION_ID,
     courseCode: c.COURSE_CODE,
     courseName: c.COURSE_NAME,

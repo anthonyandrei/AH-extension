@@ -95,7 +95,7 @@ function setupTabs() {
 }
 
 // Render Functions
-function renderLoggedOut() {
+function renderStatusBanner({ tone, message, buttonText, onButtonClick }) {
   if (planRows) planRows.replaceChildren();
   if (addCourse) addCourse.disabled = true;
   if (addBtn) addBtn.disabled = true;
@@ -110,61 +110,49 @@ function renderLoggedOut() {
 
     const note = document.createElement("div");
     note.className = "note";
-    note.dataset.tone = "warn";
+    note.dataset.tone = tone;
 
     const msg = document.createElement("div");
-    msg.textContent = "You are logged out. Please log in to ArchersHub first.";
+    msg.textContent = message;
     note.appendChild(msg);
 
-    const openBtn = document.createElement("button");
-    openBtn.className = "btn btn-ghost";
-    openBtn.style.marginTop = "8px";
-    openBtn.textContent = "Open ArchersHub";
-    openBtn.addEventListener("click", () => {
-      if (typeof chrome !== "undefined" && chrome?.tabs?.create) {
-        chrome.tabs.create({ url: "https://archershub.dlsu.edu.ph/Enlistment_V2/Index" });
-      } else {
-        window.open("https://archershub.dlsu.edu.ph/Enlistment_V2/Index", "_blank");
-      }
-    });
-    note.appendChild(openBtn);
+    if (buttonText && onButtonClick) {
+      const btn = document.createElement("button");
+      btn.className = "btn btn-ghost";
+      btn.style.marginTop = "8px";
+      btn.textContent = buttonText;
+      btn.addEventListener("click", onButtonClick);
+      note.appendChild(btn);
+    }
 
     planStatus.appendChild(note);
   }
 }
 
+function renderLoggedOut() {
+  renderStatusBanner({
+    tone: "warn",
+    message: "You are logged out. Please log in to ArchersHub first.",
+    buttonText: "Open ArchersHub",
+    onButtonClick: () => {
+      if (typeof chrome !== "undefined" && chrome?.tabs?.create) {
+        chrome.tabs.create({ url: "https://archershub.dlsu.edu.ph/Enlistment_V2/Index" });
+      } else {
+        window.open("https://archershub.dlsu.edu.ph/Enlistment_V2/Index", "_blank");
+      }
+    },
+  });
+}
+
 function renderError(err) {
-  if (planRows) planRows.replaceChildren();
-  if (addCourse) addCourse.disabled = true;
-  if (addBtn) addBtn.disabled = true;
-
-  const addRow = addCourse?.closest(".add-row");
-  if (addRow) {
-    addRow.hidden = true;
-  }
-
-  if (planStatus) {
-    planStatus.replaceChildren();
-
-    const note = document.createElement("div");
-    note.className = "note";
-    note.dataset.tone = "bad";
-
-    const msg = document.createElement("div");
-    msg.textContent = `Failed to load catalogue: ${err?.message || "Network error"}`;
-    note.appendChild(msg);
-
-    const retryBtn = document.createElement("button");
-    retryBtn.className = "btn btn-ghost";
-    retryBtn.style.marginTop = "8px";
-    retryBtn.textContent = "Retry";
-    retryBtn.addEventListener("click", () => {
+  renderStatusBanner({
+    tone: "bad",
+    message: `Failed to load catalogue: ${err?.message || "Network error"}`,
+    buttonText: "Retry",
+    onButtonClick: () => {
       load();
-    });
-    note.appendChild(retryBtn);
-
-    planStatus.appendChild(note);
-  }
+    },
+  });
 }
 
 function populateAddCourse() {
@@ -218,19 +206,26 @@ function render() {
     select.className = "b-sel";
     select.setAttribute("aria-label", `Wanted section for ${row.courseCode}`);
 
+    if (row.full) {
+      const fullOption = new Option(row.sectionCode, String(row.sectionCreationId));
+      fullOption.disabled = true;
+      fullOption.selected = true;
+      select.appendChild(fullOption);
+    }
+
     for (const opt of row.options) {
       const optionEl = new Option(opt.sectionName, String(opt.sectionCreationId));
       optionEl.dataset.sectionCode = opt.sectionCode;
       if (opt.available !== undefined && opt.available !== null) {
         optionEl.dataset.available = String(opt.available);
       }
-      if (String(opt.sectionCreationId) === String(row.sectionCreationId)) {
+      if (!row.full && String(opt.sectionCreationId) === String(row.sectionCreationId)) {
         optionEl.selected = true;
       }
       select.appendChild(optionEl);
     }
 
-    if (row.sectionCreationId !== undefined && row.sectionCreationId !== null) {
+    if (!row.full && row.sectionCreationId !== undefined && row.sectionCreationId !== null) {
       select.value = String(row.sectionCreationId);
     }
 
@@ -301,19 +296,19 @@ if (addBtn) {
     const course = catalogueData.courses.find(
       (c) => String(c.courseCreationId) === String(selectedCourseId)
     );
-    if (!course) {
+    if (!course || !Array.isArray(course.sections) || course.sections.length === 0) {
       return;
     }
 
-    const firstSection = course.sections && course.sections.length > 0 ? course.sections[0] : null;
-    const section = firstSection
-      ? { sectionCreationId: firstSection.sectionCreationId, sectionCode: firstSection.sectionCode }
-      : { sectionCreationId: null, sectionCode: null };
+    const firstSection = course.sections[0];
+    if (!firstSection || firstSection.sectionCreationId === undefined || firstSection.sectionCreationId === null) {
+      return;
+    }
 
     currentPlan = addSubject(
       currentPlan,
       { courseCreationId: course.courseCreationId, courseCode: course.courseCode },
-      section
+      { sectionCreationId: firstSection.sectionCreationId, sectionCode: firstSection.sectionCode }
     );
 
     await savePlan(currentPlan);

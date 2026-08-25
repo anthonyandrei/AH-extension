@@ -139,6 +139,15 @@ describe('plan module', () => {
       assert.deepStrictEqual(originalPlan, pristineClone);
       assert.notEqual(result, originalPlan);
     });
+
+    it('returns plan unchanged if course or section is invalid or missing IDs', () => {
+      const plan = { academicSessionId: '2025-T1', subjects: [] };
+      assert.deepStrictEqual(addSubject(plan, null, { sectionCreationId: 's1', sectionCode: 'S1' }), plan);
+      assert.deepStrictEqual(addSubject(plan, { courseCode: 'C1' }, { sectionCreationId: 's1', sectionCode: 'S1' }), plan);
+      assert.deepStrictEqual(addSubject(plan, { courseCreationId: 'c1', courseCode: 'C1' }, null), plan);
+      assert.deepStrictEqual(addSubject(plan, { courseCreationId: 'c1', courseCode: 'C1' }, { sectionCode: 'S1' }), plan);
+      assert.deepStrictEqual(addSubject(plan, { courseCreationId: 'c1', courseCode: 'C1' }, { sectionCreationId: null, sectionCode: null }), plan);
+    });
   });
 
   describe('removeSubject', () => {
@@ -425,8 +434,8 @@ describe('plan module', () => {
       assert.equal(row.full, true);
       // courseOffered must be true
       assert.equal(row.courseOffered, true);
-      // stored section must appear as the FIRST entry in options
-      assert.equal(row.options[0].sectionCreationId, 's_full');
+      // options must strictly contain live catalogue sections (no dummy synthesis)
+      assert.deepStrictEqual(row.options, catalogue.courses[0].sections);
     });
 
     it('handles a row whose stored course is not present in catalogue (course no longer offered) without throwing', () => {
@@ -529,7 +538,7 @@ describe('plan module', () => {
       assert.equal(rows[0].sectionCode, 'M1');
       assert.equal(rows[0].full, true);
       assert.equal(rows[0].courseOffered, true);
-      assert.equal(rows[0].options[0].sectionCreationId, 's1_full');
+      assert.deepStrictEqual(rows[0].options, catalogue.courses[1].sections);
 
       // Row 2: ENG101 (c2), normal section available
       assert.equal(rows[1].courseCreationId, 'c2');
@@ -538,6 +547,7 @@ describe('plan module', () => {
       assert.equal(rows[1].sectionCode, 'E1');
       assert.equal(rows[1].full, false);
       assert.equal(rows[1].courseOffered, true);
+      assert.deepStrictEqual(rows[1].options, catalogue.courses[0].sections);
 
       // Row 3: HIST101 (c3), course not in catalogue
       assert.equal(rows[2].courseCreationId, 'c3');

@@ -27,6 +27,20 @@ export function addSubject(plan, course, section) {
   const currentPlan = plan || emptyPlan();
   const subjects = Array.isArray(currentPlan.subjects) ? currentPlan.subjects : [];
 
+  if (
+    !course ||
+    course.courseCreationId === undefined ||
+    course.courseCreationId === null ||
+    !section ||
+    section.sectionCreationId === undefined ||
+    section.sectionCreationId === null
+  ) {
+    return {
+      academicSessionId: currentPlan.academicSessionId ?? null,
+      subjects: [...subjects],
+    };
+  }
+
   const exists = subjects.some(
     (s) => s.courseCreationId === course.courseCreationId || String(s.courseCreationId) === String(course.courseCreationId)
   );
@@ -133,32 +147,13 @@ export function rehydrate(storedPlan, catalogue) {
       (s) => s.sectionCreationId === subject.sectionCreationId || String(s.sectionCreationId) === String(subject.sectionCreationId)
     );
 
-    if (hasSection) {
-      return {
-        courseCode: subject.courseCode,
-        courseCreationId: subject.courseCreationId,
-        sectionCreationId: subject.sectionCreationId,
-        sectionCode: subject.sectionCode,
-        options: sections,
-        full: false,
-        courseOffered: true,
-      };
-    }
-
-    const fullSectionOption = {
-      sectionCreationId: subject.sectionCreationId,
-      sectionCode: subject.sectionCode,
-      sectionName: subject.sectionCode,
-      available: 0,
-    };
-
     return {
       courseCode: subject.courseCode,
       courseCreationId: subject.courseCreationId,
       sectionCreationId: subject.sectionCreationId,
       sectionCode: subject.sectionCode,
-      options: [fullSectionOption, ...sections],
-      full: true,
+      options: sections,
+      full: !hasSection,
       courseOffered: true,
     };
   });
