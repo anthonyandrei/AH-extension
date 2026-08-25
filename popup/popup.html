@@ -9,6 +9,10 @@
 <body>
   <div class="hdr">
     <h1>Enlistment</h1>
+    <div id="vigilChip" class="chip" data-tone="idle" hidden>
+      <span class="dot"></span>
+      <span id="vigilChipLabel">not armed</span>
+    </div>
   </div>
 
   <div class="b-tabs" role="tablist">
@@ -37,11 +41,41 @@
       <button id="addBtn" class="btn btn-ghost">Add</button>
     </div>
 
+    <p class="muted" style="font-size: 11px; margin-top: 10px;">
+      Both columns come from ArchersHub's own catalogue — the 16 courses and 102 Sections the read path already returns — so a Section you cannot spell is a Section you cannot enter.
+      <b style="color: var(--ink-2); font-weight: 500;">Full now</b> is not an error; it is the normal reason a Vigil exists.
+    </p>
+
+    <div id="planRefusal"></div>
+
+    <div id="startSection" style="margin-top: 12px;">
+      <div class="sec-h"><span>Start</span></div>
+      <div class="seg" role="group" aria-label="When to start">
+        <button type="button" id="startNowBtn" data-start="now" aria-pressed="false">Now</button>
+        <button type="button" id="startScheduledBtn" data-start="at-time" aria-pressed="true">At a set time</button>
+      </div>
+      <div id="startInfo" style="margin-top: 7px;">
+        <input type="datetime-local" id="startTimeInput" class="dt" aria-label="Start time">
+        <p id="startNowDescription" class="muted" style="font-size: 11px; margin-top: 7px; display: none;">
+          It starts watching the moment you press the button. There is no Armed state — the badge goes straight to a count.
+        </p>
+      </div>
+    </div>
+
+    <button type="button" id="armBtn" class="btn btn-primary btn-lg btn-block" style="margin-top: 12px;">
+      Arm at a set time
+    </button>
+
+    <details id="checklistDetails" class="a-more" style="margin-top: 12px;">
+      <summary id="checklistSummary">Night-before checklist</summary>
+      <ul id="checklistItems" class="a-check" style="padding-bottom: 10px;"></ul>
+    </details>
+
     <div id="planStatus"></div>
   </div>
 
   <div id="panelRun" class="sec" role="tabpanel" aria-labelledby="tabRun" hidden>
-    <p class="empty">Nothing is running.</p>
+    <p class="empty">Nothing is running.<br><span style="font-size: 11px;">Arm a Vigil on the Plan tab.</span></p>
   </div>
 
   <div id="panelReport" class="sec" role="tabpanel" aria-labelledby="tabReport" hidden>
