@@ -163,10 +163,12 @@ The **Pass** is the unit of retry: `#btnEnlistment` saves the whole Course Selec
 1. Classify the Page State (§6).
 2. If it's a terminal or waiting state (`Settling`, `ActivityClosed`, anything not `Step2Bound`),
    act per the table in §6 and stop here; this is not yet a complete Pass (defined below).
-3. On `Step2Bound`, read `GetAllCourseSectionData` / `GetCourseWiseSectionData`, scoped to the
-   requested subjects only. Run Reconciliation (§8) against the result.
+3. On `Step2Bound`, read `GetAllCourseSectionData` / `GetCourseWiseSectionData` for the student's
+   catalogue. Reconciliation (§8) is scoped to the Plan's requested subjects (while preserving any
+   unrequested held subjects).
 4. If the Save Gate (§8) is satisfied and at least one subject needs a change, click
-   `#btnEnlistment` once. Re-read the held set afterward and diff it against the pre-click read.
+   `#btnEnlistment` once. Re-read the full catalogue afterward and diff the complete held set
+   against the pre-click read across all courses.
 5. If the Save Gate refuses, do not click. Reclassify next Pass.
 6. Record whether this Pass was complete (§9's Stall clock consumes this).
 
@@ -241,8 +243,8 @@ exactly the procedure a student performs by hand and takes on no more risk than 
 actually protects the Slot is the Save Gate plus the post-write check below, not a claim about
 atomicity.
 
-**After every write**, re-read `GetAllCourseSectionData` and diff the held set against what it was
-immediately before the click:
+**After every write**, re-read `GetAllCourseSectionData` (the full catalogue) and diff the entire
+held set against what it was immediately before the click across all courses:
 
 - Unchanged or grown: normal, a no-change or successful Pass.
 - Shrunk (a held Slot is gone): **Lost Slot**, a Notice-tier event (§10). The Vigil does not stop.

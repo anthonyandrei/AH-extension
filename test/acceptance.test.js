@@ -1928,6 +1928,39 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
       assert.ok(ownedTab, 'Owned Tab must remain open as evidence');
     });
   });
+
+  describe('Issue #30 Acceptance: Clarify Pass subject scoping vs post-write Save Gate verification in SPEC.md', () => {
+    it('SPEC.md explicitly states whether post-write Save Gate verification reads the entire catalogue or only the Plan\'s requested subjects', () => {
+      const specContent = fs.readFileSync(new URL('../docs/SPEC.md', import.meta.url), 'utf-8');
+
+      // Acceptance criterion 1: SPEC.md explicitly states that post-write verification reads the entire catalogue
+      assert.match(
+        specContent,
+        /re-read `GetAllCourseSectionData`\s*\([^)]*full catalogue[^)]*\)/i
+      );
+      assert.match(
+        specContent,
+        /diff the (?:entire|complete)\s+held set against what it was immediately before the click across all courses/i
+      );
+    });
+
+    it('§7 and §8 no longer contain contradictory statements about subject scoping during a Pass', () => {
+      const specContent = fs.readFileSync(new URL('../docs/SPEC.md', import.meta.url), 'utf-8');
+
+      // Acceptance criterion 2: §7 and §8 distinguish full catalogue reading / Save Gate checks from Plan-scoped Reconciliation
+      // Step 3 in §7 does NOT claim that HTTP endpoint reading is scoped only to requested subjects
+      assert.equal(
+        specContent.includes('scoped to the requested subjects only'),
+        false
+      );
+      // §7 explicitly notes that Reconciliation is scoped to the Plan's requested subjects while preserving unrequested held subjects
+      assert.match(
+        specContent,
+        /Reconciliation \(§8\) is scoped to the Plan's requested subjects/i
+      );
+    });
+  });
 });
+
 
 
