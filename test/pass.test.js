@@ -11,6 +11,8 @@ import {
   executePass,
   stopVigil,
   diffHeldCourses,
+  extractCourseSnapshots,
+  detectAndRecordLostSlots,
   recordAcquisitionsAndUpgrades,
   checkStall,
   handleStall,
@@ -1930,6 +1932,108 @@ describe('pass module', () => {
       assert.equal(result.lostSlots[0].courseCreationId, '101');
       assert.equal(result.lostSlots[0].courseCode, 'CS101');
       assert.equal(result.lostSlots[0].preHeldSectionCreationId, 501);
+    });
+  });
+
+  describe('extractCourseSnapshots', () => {
+    it('extracts heldSnapshot and sectionsSnapshot maps from course list', () => {
+      const courses = [
+        {
+          courseCreationId: 101,
+          heldSectionCreationId: 501,
+          sections: [{ sectionCreationId: 501 }, { sectionCreationId: 502 }],
+        },
+        {
+          courseCreationId: 102,
+          heldSectionCreationId: null,
+          sections: [{ sectionCreationId: 601 }],
+        },
+        {
+          courseCreationId: 103,
+          heldSectionCreationId: undefined,
+          sections: null,
+        },
+      ];
+
+      const { heldSnapshot, sectionsSnapshot } = extractCourseSnapshots(courses);
+
+      assert.deepStrictEqual(heldSnapshot, {
+        101: 501,
+        102: null,
+        103: null,
+      });
+      assert.deepStrictEqual(sectionsSnapshot, {
+        101: [501, 502],
+        102: [601],
+        103: [],
+      });
+    });
+
+    it('returns empty snapshot maps when courses array is empty or undefined', () => {
+      assert.deepStrictEqual(extractCourseSnapshots([]), {
+        heldSnapshot: {},
+        sectionsSnapshot: {},
+      });
+      assert.deepStrictEqual(extractCourseSnapshots(null), {
+        heldSnapshot: {},
+        sectionsSnapshot: {},
+      });
+    });
+  });
+
+  describe('detectAndRecordLostSlots', () => {
+    it('emits Notice "Lost Slot" ledger entry when held slot is lost', async () => {
+      const storage = createMockStorage({ ledger: [] });
+      const notifications = createMockNotifications();
+      const alarms = createMockAlarms();
+      const now = 1756180000000;
+
+      const preHeld = { 101: 501, 102: 601 };
+      const postHeld = { 101: null, 102: 601 }; // 101 was lost!
+      const courses = [{ courseCreationId: 101, courseCode: 'CS101' }];
+
+      const diffResult = await detectAndRecordLostSlots({
+        preHeldSnapshot: preHeld,
+        postHeldSnapshot: postHeld,
+        courses,
+        storageApi: storage,
+        notificationsApi: notifications,
+        alarmsApi: alarms,
+        now,
+      });
+
+      assert.equal(diffResult.isShrunk, true);
+      assert.equal(diffResult.lostSlots.length, 1);
+
+      const store = storage._getStore();
+      assert.equal(store.ledger.length, 1);
+      assert.equal(store.ledger[0].tier, 'notice');
+      assert.equal(store.ledger[0].type, 'lost_slot');
+      assert.equal(store.ledger[0].title, 'Lost Slot');
+      assert.equal(store.ledger[0].cause, 'Held slot for CS101 was lost during switch');
+      assert.equal(store.ledger[0].timestamp, now);
+    });
+
+    it('does not emit ledger entries when held slots are unchanged or gained', async () => {
+      const storage = createMockStorage({ ledger: [] });
+      const notifications = createMockNotifications();
+      const alarms = createMockAlarms();
+
+      const preHeld = { 101: 501 };
+      const postHeld = { 101: 502, 102: 601 }; // Upgraded and gained
+      const courses = [{ courseCreationId: 101, courseCode: 'CS101' }];
+
+      const diffResult = await detectAndRecordLostSlots({
+        preHeldSnapshot: preHeld,
+        postHeldSnapshot: postHeld,
+        courses,
+        storageApi: storage,
+        notificationsApi: notifications,
+        alarmsApi: alarms,
+      });
+
+      assert.equal(diffResult.isShrunk, false);
+      assert.equal(storage._getStore().ledger.length, 0);
     });
   });
 

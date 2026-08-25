@@ -348,6 +348,36 @@ describe('arming module', () => {
       assert.ok(Array.isArray(ledger) && ledger.length === 1);
       assert.equal(ledger[0].tier, 'ambient');
       assert.equal(ledger[0].title, 'Vigil started');
+      assert.equal(ledger[0].cause, 'Start time reached');
+    });
+
+    it('persists plan to storage and records custom cause when supplied', async () => {
+      const storage = createMockStorage();
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const now = 1756180000000;
+
+      const plan = {
+        startMode: 'now',
+        subjects: [{ courseCreationId: 'c1' }],
+      };
+
+      const updated = await transitionArmedToWatching({
+        vigil: { state: 'armed', startedAt: now - 5000 },
+        plan,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        now,
+        cause: 'Watching 1 subject',
+      });
+
+      assert.equal(updated.state, 'watching');
+      assert.equal(updated.startedAt, now - 5000);
+      assert.deepStrictEqual(storage._getStore().plan, plan);
+
+      const ledger = storage._getStore().ledger;
+      assert.equal(ledger[0].cause, 'Watching 1 subject');
     });
   });
 

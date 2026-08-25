@@ -470,6 +470,27 @@ export async function stopVigil({
 }
 
 /**
+ * Constructs held and section snapshots from a course list.
+ *
+ * @param {Array<object>} [courses=[]]
+ * @returns {{
+ *   heldSnapshot: Record<string|number, number|null>,
+ *   sectionsSnapshot: Record<string|number, Array<number>>
+ * }}
+ */
+export function extractCourseSnapshots(courses = []) {
+  const heldSnapshot = {};
+  const sectionsSnapshot = {};
+  for (const c of (courses || [])) {
+    heldSnapshot[c.courseCreationId] = c.heldSectionCreationId ?? null;
+    sectionsSnapshot[c.courseCreationId] = Array.isArray(c.sections)
+      ? c.sections.map((s) => s.sectionCreationId)
+      : [];
+  }
+  return { heldSnapshot, sectionsSnapshot };
+}
+
+/**
  * Diffs the held courses immediately before the strike against the post-write read.
  * Unchanged or grown: normal Pass.
  * Shrunk: Lost Slot (a held course is no longer held).
@@ -527,6 +548,61 @@ export function diffHeldCourses({
     retainedCount,
     gainedCount,
   };
+}
+
+/**
+ * Diffs pre- and post-held course snapshots and records Notice ledger entries for any lost slots.
+ *
+ * @param {{
+ *   preHeldSnapshot?: Record<string|number, number|null>,
+ *   postHeldSnapshot?: Record<string|number, number|null>,
+ *   courses?: Array<object>,
+ *   storageApi?: object,
+ *   notificationsApi?: object,
+ *   alarmsApi?: object,
+ *   now?: number
+ * }} params
+ * @returns {Promise<{
+ *   isShrunk: boolean,
+ *   lostSlots: Array<{ courseCreationId: string|number, preHeldSectionCreationId: string|number, courseCode?: string }>,
+ *   retainedCount: number,
+ *   gainedCount: number
+ * }>}
+ */
+export async function detectAndRecordLostSlots({
+  preHeldSnapshot = {},
+  postHeldSnapshot = {},
+  courses = [],
+  storageApi,
+  notificationsApi,
+  alarmsApi,
+  now = Date.now(),
+}) {
+  const diffResult = diffHeldCourses({
+    preHeldSnapshot,
+    postHeldSnapshot,
+    courses,
+  });
+
+  if (diffResult.isShrunk) {
+    for (const lost of diffResult.lostSlots) {
+      await appendLedgerEntry({
+        entry: {
+          tier: 'notice',
+          type: 'lost_slot',
+          title: 'Lost Slot',
+          cause: `Held slot for ${lost.courseCode} was lost during switch`,
+          timestamp: now,
+        },
+        storageApi,
+        notificationsApi,
+        alarmsApi,
+        now,
+      });
+    }
+  }
+
+  return diffResult;
 }
 
 /**
@@ -945,42 +1021,24 @@ export async function executePass({
     ? plan.subjects.map((s) => s.courseCreationId)
     : [];
 
-  const currentHeldSnapshot = {};
-  const currentSectionsSnapshot = {};
-  for (const c of courses) {
-    currentHeldSnapshot[c.courseCreationId] = c.heldSectionCreationId ?? null;
-    currentSectionsSnapshot[c.courseCreationId] = Array.isArray(c.sections)
-      ? c.sections.map((s) => s.sectionCreationId)
-      : [];
-  }
+  const {
+    heldSnapshot: currentHeldSnapshot,
+    sectionsSnapshot: currentSectionsSnapshot,
+  } = extractCourseSnapshots(courses);
 
   const previousHeldSnapshot = data?.lastHeldSnapshot || vigil?.previousHeldSnapshot;
   const previousSectionsSnapshot = data?.lastSectionsSnapshot || vigil?.previousSectionsSnapshot;
 
   if (previousHeldSnapshot) {
-    const diffResult = diffHeldCourses({
+    await detectAndRecordLostSlots({
       preHeldSnapshot: previousHeldSnapshot,
       postHeldSnapshot: currentHeldSnapshot,
       courses,
+      storageApi,
+      notificationsApi,
+      alarmsApi,
+      now,
     });
-
-    if (diffResult.isShrunk) {
-      for (const lost of diffResult.lostSlots) {
-        await appendLedgerEntry({
-          entry: {
-            tier: 'notice',
-            type: 'lost_slot',
-            title: 'Lost Slot',
-            cause: `Held slot for ${lost.courseCode} was lost during switch`,
-            timestamp: now,
-          },
-          storageApi,
-          notificationsApi,
-          alarmsApi,
-          now,
-        });
-      }
-    }
 
     await recordAcquisitionsAndUpgrades({
       plan,
@@ -1197,40 +1255,21 @@ export async function executePass({
 
     // Post-write read succeeded: verify new state against postCatalogue.courses
     const postCourses = postCatalogue.courses;
-    const postHeldSnapshot = {};
-    const postSectionsSnapshot = {};
-    for (const c of postCourses) {
-      postHeldSnapshot[c.courseCreationId] = c.heldSectionCreationId ?? null;
-      postSectionsSnapshot[c.courseCreationId] = Array.isArray(c.sections)
-        ? c.sections.map((s) => s.sectionCreationId)
-        : [];
-    }
+    const {
+      heldSnapshot: postHeldSnapshot,
+      sectionsSnapshot: postSectionsSnapshot,
+    } = extractCourseSnapshots(postCourses);
 
     // Diff held set against pre-click snapshot
-    const diffResult = diffHeldCourses({
+    await detectAndRecordLostSlots({
       preHeldSnapshot: currentHeldSnapshot,
       postHeldSnapshot,
       courses: postCourses,
+      storageApi,
+      notificationsApi,
+      alarmsApi,
+      now,
     });
-
-    if (diffResult.isShrunk) {
-      // Lost Slot! Tier: Notice (does NOT stop the Vigil)
-      for (const lost of diffResult.lostSlots) {
-        await appendLedgerEntry({
-          entry: {
-            tier: 'notice',
-            type: 'lost_slot',
-            title: 'Lost Slot',
-            cause: `Held slot for ${lost.courseCode} was lost during switch`,
-            timestamp: now,
-          },
-          storageApi,
-          notificationsApi,
-          alarmsApi,
-          now,
-        });
-      }
-    }
 
     await recordAcquisitionsAndUpgrades({
       plan,

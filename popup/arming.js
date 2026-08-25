@@ -202,7 +202,8 @@ export function updateBadge({ state, unresolvedCount = 0, actionApi = typeof chr
  *   tabsApi?: object,
  *   notificationsApi?: object,
  *   baseUrl?: string,
- *   now?: number
+ *   now?: number,
+ *   cause?: string
  * }} params
  * @returns {Promise<object>} The updated vigil record
  */
@@ -216,16 +217,23 @@ export async function transitionArmedToWatching({
   notificationsApi = typeof chrome !== 'undefined' ? chrome?.notifications : null,
   baseUrl = 'https://archershub.dlsu.edu.ph',
   now = Date.now(),
+  cause,
 }) {
   const updatedVigil = {
     ...(vigil || {}),
+    startedAt: typeof vigil?.startedAt === 'number' ? vigil.startedAt : now,
     state: 'watching',
     nextFireTime: null,
     lastChangeAt: now,
   };
 
+  const storagePayload = { vigil: updatedVigil, lastCompletePassAt: now };
+  if (plan) {
+    storagePayload.plan = plan;
+  }
+
   if (storageApi?.set) {
-    await storageApi.set({ vigil: updatedVigil, lastCompletePassAt: now });
+    await storageApi.set(storagePayload);
   }
   if (alarmsApi?.clear) {
     await alarmsApi.clear('vigil_start');
@@ -242,12 +250,18 @@ export async function transitionArmedToWatching({
     actionApi,
   });
 
+  const entryCause = cause || (vigil?.state === 'armed'
+    ? 'Start time reached'
+    : (Array.isArray(plan?.subjects) && plan.subjects.length > 0
+        ? `Watching ${plan.subjects.length} subject${plan.subjects.length === 1 ? '' : 's'}`
+        : 'Start time reached'));
+
   await appendLedgerEntry({
     entry: {
       tier: 'ambient',
       type: 'watching',
       title: 'Vigil started',
-      cause: 'Start time reached',
+      cause: entryCause,
     },
     storageApi,
     notificationsApi,
@@ -355,69 +369,39 @@ export async function armVigil({
   }
 
   // Acceptance Criterion 1: arming opens one Owned Tab at /Enlistment_V2/Index
-  let ownedTab = null;
   if (tabsApi) {
-    ownedTab = await ensureOwnedTab({ tabsApi, storageApi, baseUrl });
+    await ensureOwnedTab({ tabsApi, storageApi, baseUrl });
   }
 
   const nextFireTime = startTime ? new Date(startTime).getTime() : now;
 
   // If startMode is 'now' OR start time has already passed: start watching immediately (no Armed state in between)
   if (startMode === 'now' || (typeof nextFireTime === 'number' && nextFireTime <= now)) {
-    const vigil = createVigilRecord({
-      state: 'watching',
-      nextFireTime: null,
-      lastChangeAt: now,
-      startedAt: now,
-    });
     const planToSave = {
       ...plan,
       startMode: 'now',
       startTime: null,
     };
 
-    if (storageApi?.set) {
-      await storageApi.set({ vigil, plan: planToSave, lastCompletePassAt: now });
-    }
-    if (alarmsApi?.clear) {
-      await alarmsApi.clear('vigil_start');
-      await alarmsApi.clear('vigil_keepalive');
-    }
-    if (alarmsApi?.create) {
-      alarmsApi.create('vigil_pass', { delayInMinutes: 0.01 });
-    }
-
-    updateBadge({
+    const initialVigil = createVigilRecord({
       state: 'watching',
-      unresolvedCount: plan.subjects.length,
-      actionApi,
+      nextFireTime: null,
+      lastChangeAt: now,
+      startedAt: now,
     });
 
-    await appendLedgerEntry({
-      entry: {
-        tier: 'ambient',
-        type: 'watching',
-        title: 'Vigil started',
-        cause: `Watching ${plan.subjects.length} subject${plan.subjects.length === 1 ? '' : 's'}`,
-      },
+    const vigil = await transitionArmedToWatching({
+      vigil: initialVigil,
+      plan: planToSave,
       storageApi,
-      notificationsApi,
       alarmsApi,
+      actionApi,
+      tabsApi,
+      notificationsApi,
+      baseUrl,
       now,
+      cause: `Watching ${plan.subjects.length} subject${plan.subjects.length === 1 ? '' : 's'}`,
     });
-
-    if (tabsApi && ownedTab?.tabId) {
-      await steerOwnedTab({
-        tabId: ownedTab.tabId,
-        tabsApi,
-        storageApi,
-        actionApi,
-        alarmsApi,
-        notificationsApi,
-        baseUrl,
-        now,
-      });
-    }
 
     return {
       success: true,
