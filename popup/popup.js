@@ -1,209 +1,360 @@
+import { readCatalogue } from "./catalogue.js";
+import { emptyPlan, addSubject, removeSubject, setWantedSection, rehydrate } from "./plan.js";
+
 // DOM Elements
-const subjectInput = document.getElementById('subjectInput');
-const sectionInput = document.getElementById('sectionInput');
-const addBtn = document.getElementById('addBtn');
-const subjectsList = document.getElementById('subjectsList');
-const addError = document.getElementById('addError');
-const executionLog = document.getElementById('executionLog');
+const tabPlan = document.getElementById("tabPlan");
+const tabRun = document.getElementById("tabRun");
+const tabReport = document.getElementById("tabReport");
 
-// Storage keys
-const SUBJECTS_KEY = 'enlistedSubjects';
-const LOG_KEY = 'executionLog';
+const panelPlan = document.getElementById("panelPlan");
+const panelRun = document.getElementById("panelRun");
+const panelReport = document.getElementById("panelReport");
 
-function normalizeSubjectEntry(entry) {
-    if (!entry || typeof entry !== 'object') {
-        return null;
+const planRows = document.getElementById("planRows");
+const addCourse = document.getElementById("addCourse");
+const addBtn = document.getElementById("addBtn");
+const planStatus = document.getElementById("planStatus");
+
+// State
+let currentPlan = emptyPlan();
+let catalogueData = null;
+
+// Storage helpers
+function storageGet(keys) {
+  return new Promise((resolve) => {
+    if (typeof chrome !== "undefined" && chrome?.storage?.local?.get) {
+      chrome.storage.local.get(keys, (res) => {
+        if (chrome.runtime?.lastError) {
+          resolve({});
+        } else {
+          resolve(res || {});
+        }
+      });
+    } else {
+      resolve({});
+    }
+  });
+}
+
+function storageSet(items) {
+  return new Promise((resolve) => {
+    if (typeof chrome !== "undefined" && chrome?.storage?.local?.set) {
+      chrome.storage.local.set(items, () => {
+        resolve();
+      });
+    } else {
+      resolve();
+    }
+  });
+}
+
+function storageRemove(keys) {
+  return new Promise((resolve) => {
+    if (typeof chrome !== "undefined" && chrome?.storage?.local?.remove) {
+      chrome.storage.local.remove(keys, () => {
+        resolve();
+      });
+    } else {
+      resolve();
+    }
+  });
+}
+
+async function savePlan(plan) {
+  await storageSet({ plan });
+}
+
+// Tab Switching
+function setupTabs() {
+  const tabs = [
+    { button: tabPlan, panel: panelPlan },
+    { button: tabRun, panel: panelRun },
+    { button: tabReport, panel: panelReport },
+  ];
+
+  function selectTab(selectedButton) {
+    for (const { button, panel } of tabs) {
+      if (!button || !panel) continue;
+      const isSelected = button === selectedButton;
+      button.setAttribute("aria-selected", String(isSelected));
+      if (isSelected) {
+        panel.removeAttribute("hidden");
+      } else {
+        panel.setAttribute("hidden", "");
+      }
+    }
+  }
+
+  for (const { button } of tabs) {
+    if (button) {
+      button.addEventListener("click", () => selectTab(button));
+    }
+  }
+
+  selectTab(tabPlan);
+}
+
+// Render Functions
+function renderLoggedOut() {
+  if (planRows) planRows.replaceChildren();
+  if (addCourse) addCourse.disabled = true;
+  if (addBtn) addBtn.disabled = true;
+
+  const addRow = addCourse?.closest(".add-row");
+  if (addRow) {
+    addRow.hidden = true;
+  }
+
+  if (planStatus) {
+    planStatus.replaceChildren();
+
+    const note = document.createElement("div");
+    note.className = "note";
+    note.dataset.tone = "warn";
+
+    const msg = document.createElement("div");
+    msg.textContent = "You are logged out. Please log in to ArchersHub first.";
+    note.appendChild(msg);
+
+    const openBtn = document.createElement("button");
+    openBtn.className = "btn btn-ghost";
+    openBtn.style.marginTop = "8px";
+    openBtn.textContent = "Open ArchersHub";
+    openBtn.addEventListener("click", () => {
+      if (typeof chrome !== "undefined" && chrome?.tabs?.create) {
+        chrome.tabs.create({ url: "https://archershub.dlsu.edu.ph/Enlistment_V2/Index" });
+      } else {
+        window.open("https://archershub.dlsu.edu.ph/Enlistment_V2/Index", "_blank");
+      }
+    });
+    note.appendChild(openBtn);
+
+    planStatus.appendChild(note);
+  }
+}
+
+function renderError(err) {
+  if (planRows) planRows.replaceChildren();
+  if (addCourse) addCourse.disabled = true;
+  if (addBtn) addBtn.disabled = true;
+
+  const addRow = addCourse?.closest(".add-row");
+  if (addRow) {
+    addRow.hidden = true;
+  }
+
+  if (planStatus) {
+    planStatus.replaceChildren();
+
+    const note = document.createElement("div");
+    note.className = "note";
+    note.dataset.tone = "bad";
+
+    const msg = document.createElement("div");
+    msg.textContent = `Failed to load catalogue: ${err?.message || "Network error"}`;
+    note.appendChild(msg);
+
+    const retryBtn = document.createElement("button");
+    retryBtn.className = "btn btn-ghost";
+    retryBtn.style.marginTop = "8px";
+    retryBtn.textContent = "Retry";
+    retryBtn.addEventListener("click", () => {
+      load();
+    });
+    note.appendChild(retryBtn);
+
+    planStatus.appendChild(note);
+  }
+}
+
+function populateAddCourse() {
+  if (!addCourse) return;
+  addCourse.replaceChildren(new Option("Add a subject…", ""));
+
+  if (!catalogueData || !Array.isArray(catalogueData.courses)) {
+    return;
+  }
+
+  const existingSubjectIds = new Set(
+    (currentPlan?.subjects || []).map((s) => String(s.courseCreationId))
+  );
+
+  for (const course of catalogueData.courses) {
+    if (!existingSubjectIds.has(String(course.courseCreationId))) {
+      addCourse.appendChild(new Option(course.courseCode, String(course.courseCreationId)));
+    }
+  }
+}
+
+function render() {
+  if (addCourse) addCourse.disabled = false;
+  if (addBtn) addBtn.disabled = false;
+
+  const addRow = addCourse?.closest(".add-row");
+  if (addRow) {
+    addRow.hidden = false;
+  }
+
+  if (planStatus) {
+    planStatus.replaceChildren();
+  }
+
+  if (!planRows) return;
+  planRows.replaceChildren();
+
+  const rows = rehydrate(currentPlan, catalogueData);
+
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+
+    // 1. Subject code (plain text)
+    const tdSubject = document.createElement("td");
+    tdSubject.textContent = row.courseCode;
+    tr.appendChild(tdSubject);
+
+    // 2. Wanted Section dropdown
+    const tdSection = document.createElement("td");
+    const select = document.createElement("select");
+    select.className = "b-sel";
+    select.setAttribute("aria-label", `Wanted section for ${row.courseCode}`);
+
+    for (const opt of row.options) {
+      const optionEl = new Option(opt.sectionName, String(opt.sectionCreationId));
+      optionEl.dataset.sectionCode = opt.sectionCode;
+      if (opt.available !== undefined && opt.available !== null) {
+        optionEl.dataset.available = String(opt.available);
+      }
+      if (String(opt.sectionCreationId) === String(row.sectionCreationId)) {
+        optionEl.selected = true;
+      }
+      select.appendChild(optionEl);
     }
 
-    const subject = String(entry.subject || '').trim().toUpperCase();
-    const section = String(entry.section || '').trim().toUpperCase();
-
-    if (!subject || !section) {
-        return null;
+    if (row.sectionCreationId !== undefined && row.sectionCreationId !== null) {
+      select.value = String(row.sectionCreationId);
     }
 
-    return { subject, section };
-}
-
-function dedupeSubjectsBySubject(subjects) {
-    const uniqueSubjects = [];
-    const seenSubjects = new Set();
-
-    subjects.forEach((entry) => {
-        const normalized = normalizeSubjectEntry(entry);
-        if (!normalized) {
-            return;
-        }
-
-        if (!seenSubjects.has(normalized.subject)) {
-            seenSubjects.add(normalized.subject);
-            uniqueSubjects.push(normalized);
-        }
+    select.addEventListener("change", async () => {
+      const chosenOption = select.options[select.selectedIndex];
+      if (!chosenOption) return;
+      const sectionCreationId = chosenOption.value;
+      const sectionCode = chosenOption.dataset.sectionCode || chosenOption.textContent;
+      currentPlan = setWantedSection(currentPlan, row.courseCreationId, {
+        sectionCreationId,
+        sectionCode,
+      });
+      await savePlan(currentPlan);
+      render();
     });
 
-    return uniqueSubjects;
-}
+    tdSection.appendChild(select);
+    tr.appendChild(tdSection);
 
-// Initialize popup on open
-document.addEventListener('DOMContentLoaded', () => {
-    loadSubjects();
-    loadExecutionLog();
-    setupEventListeners();
-});
-
-// Event Listeners
-addBtn.addEventListener('click', addSubject);
-
-subjectInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') addSubject();
-});
-
-sectionInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') addSubject();
-});
-
-// Add subject to list
-function addSubject() {
-    const subject = subjectInput.value.trim().toUpperCase();
-    const section = sectionInput.value.trim().toUpperCase();
-    
-    addError.textContent = '';
-    
-    if (!subject || !section) {
-        addError.textContent = 'Both subject and section are required.';
-        return;
+    // 3. Availability text
+    const tdAvail = document.createElement("td");
+    let availText = "";
+    if (row.full) {
+      availText = "full now";
+    } else {
+      const selectedOpt = row.options.find(
+        (opt) => String(opt.sectionCreationId) === String(row.sectionCreationId)
+      );
+      if (selectedOpt) {
+        if (selectedOpt.available === 0) {
+          availText = "full now";
+        } else if (typeof selectedOpt.available === "number") {
+          availText = `${selectedOpt.available} left`;
+        }
+      }
     }
-    
-    if (subject.length > 7 || section.length > 4) {
-        addError.textContent = 'Inputs must be 7 characters for subject and 4 characters for section or less.';
-        return;
+    tdAvail.textContent = availText;
+    tr.appendChild(tdAvail);
+
+    // 4. Remove button
+    const tdRemove = document.createElement("td");
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "b-x";
+    removeBtn.textContent = "×";
+    removeBtn.setAttribute("aria-label", `Remove ${row.courseCode}`);
+    removeBtn.addEventListener("click", async () => {
+      currentPlan = removeSubject(currentPlan, row.courseCreationId);
+      await savePlan(currentPlan);
+      render();
+    });
+    tdRemove.appendChild(removeBtn);
+    tr.appendChild(tdRemove);
+
+    planRows.appendChild(tr);
+  }
+
+  populateAddCourse();
+}
+
+// Add Course Event Handler
+if (addBtn) {
+  addBtn.addEventListener("click", async () => {
+    const selectedCourseId = addCourse?.value;
+    if (!selectedCourseId || !catalogueData?.courses) {
+      return;
     }
-    
-    chrome.storage.local.get([SUBJECTS_KEY], (result) => {
-        let subjects = dedupeSubjectsBySubject(result[SUBJECTS_KEY] || []);
-        
-        // Prevent duplicate subject codes.
-        const isDuplicate = subjects.some(s => s.subject === subject);
-        if (isDuplicate) {
-            addError.textContent = 'This subject is already in the list.';
-            return;
-        }
-        
-        subjects.push({ subject, section });
-        chrome.storage.local.set({ [SUBJECTS_KEY]: subjects }, () => {
-            subjectInput.value = '';
-            sectionInput.value = '';
-            loadSubjects();
-            addLog(`Added ${subject} - ${section}`, 'info');
-        });
-    });
-}
 
-// Remove subject from list
-function removeSubject(subject, section) {
-    chrome.storage.local.get([SUBJECTS_KEY], (result) => {
-        let subjects = dedupeSubjectsBySubject(result[SUBJECTS_KEY] || []);
-        subjects = subjects.filter(s => !(s.subject === subject && s.section === section));
-        chrome.storage.local.set({ [SUBJECTS_KEY]: subjects }, () => {
-            loadSubjects();
-            addLog(`Removed ${subject} - ${section}`, 'info');
-        });
-    });
-}
-
-// Load subjects from storage
-function loadSubjects() {
-    chrome.storage.local.get([SUBJECTS_KEY], (result) => {
-        const rawSubjects = result[SUBJECTS_KEY] || [];
-        const subjects = dedupeSubjectsBySubject(rawSubjects);
-
-        if (subjects.length !== rawSubjects.length) {
-            chrome.storage.local.set({ [SUBJECTS_KEY]: subjects });
-        }
-        
-        if (subjects.length === 0) {
-            subjectsList.innerHTML = '<p class="empty-message">No subjects added yet</p>';
-            return;
-        }
-        
-        subjectsList.innerHTML = subjects
-            .map(({ subject, section }) => `
-                <div class="subject-item">
-                    <div class="subject-info">
-                        <span class="subject-code">${subject}</span>
-                        <span class="subject-section">${section}</span>
-                    </div>
-                    <button
-                        class="btn btn-danger delete-subject-btn"
-                        data-subject="${encodeURIComponent(subject)}"
-                        data-section="${encodeURIComponent(section)}"
-                    >Delete</button>
-                </div>
-            `)
-            .join('');
-    });
-}
-
-// Execution log management
-function addLog(message, type = 'info') {
-    const timestamp = new Date().toLocaleTimeString();
-    const logEntry = document.createElement('div');
-    logEntry.className = `log-entry ${type}`;
-    logEntry.textContent = `[${timestamp}] ${message}`;
-    
-    executionLog.insertBefore(logEntry, executionLog.firstChild);
-    
-    // Keep only last 20 entries
-    while (executionLog.children.length > 20) {
-        executionLog.removeChild(executionLog.lastChild);
+    const course = catalogueData.courses.find(
+      (c) => String(c.courseCreationId) === String(selectedCourseId)
+    );
+    if (!course) {
+      return;
     }
-    
-    // Save to storage
-    chrome.storage.local.get([LOG_KEY], (result) => {
-        let logs = result[LOG_KEY] || [];
-        logs.unshift({ message, type, timestamp });
-        logs = logs.slice(0, 50); // Keep last 50
-        chrome.storage.local.set({ [LOG_KEY]: logs });
-    });
+
+    const firstSection = course.sections && course.sections.length > 0 ? course.sections[0] : null;
+    const section = firstSection
+      ? { sectionCreationId: firstSection.sectionCreationId, sectionCode: firstSection.sectionCode }
+      : { sectionCreationId: null, sectionCode: null };
+
+    currentPlan = addSubject(
+      currentPlan,
+      { courseCreationId: course.courseCreationId, courseCode: course.courseCode },
+      section
+    );
+
+    await savePlan(currentPlan);
+    render();
+  });
 }
 
-// Load execution log from storage
-function loadExecutionLog() {
-    chrome.storage.local.get([LOG_KEY], (result) => {
-        const logs = result[LOG_KEY] || [];
-        executionLog.innerHTML = '';
-        
-        if (logs.length === 0) {
-            addLog('Ready to enlist. Please log in first on ArchersHub.', 'info');
-            return;
-        }
-        
-        logs.forEach(({ message, type, timestamp }) => {
-            const logEntry = document.createElement('div');
-            logEntry.className = `log-entry ${type}`;
-            logEntry.textContent = `[${timestamp}] ${message}`;
-            executionLog.appendChild(logEntry);
-        });
-    });
+// Main Load Sequence
+async function load() {
+  try {
+    if (planStatus) planStatus.replaceChildren();
+
+    // Remove legacy keys and load stored plan
+    await storageRemove(["enlistedSubjects", "executionLog"]);
+    const storageResult = await storageGet(["plan"]);
+    currentPlan = storageResult.plan || emptyPlan();
+    if (!Array.isArray(currentPlan.subjects)) {
+      currentPlan = emptyPlan();
+    }
+
+    // Read live catalogue
+    const catalogue = await readCatalogue();
+    catalogueData = catalogue;
+
+    if (!catalogue || catalogue.loggedIn === false) {
+      renderLoggedOut();
+      return;
+    }
+
+    if (catalogue.academicSessionId && !currentPlan.academicSessionId) {
+      currentPlan.academicSessionId = catalogue.academicSessionId;
+      await savePlan(currentPlan);
+    }
+
+    render();
+  } catch (err) {
+    renderError(err);
+  }
 }
 
-// Setup event listeners
-function setupEventListeners() {
-    // Handle dynamic delete buttons via event delegation.
-    subjectsList.addEventListener('click', (event) => {
-        const deleteBtn = event.target.closest('.delete-subject-btn');
-        if (!deleteBtn) {
-            return;
-        }
+// Initialize on load
+setupTabs();
+load();
 
-        const subject = decodeURIComponent(deleteBtn.dataset.subject || '');
-        const section = decodeURIComponent(deleteBtn.dataset.section || '');
-
-        if (!subject || !section) {
-            addLog('Unable to delete subject: missing subject/section data.', 'error');
-            return;
-        }
-
-        removeSubject(subject, section);
-    });
-}
