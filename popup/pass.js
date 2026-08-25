@@ -567,6 +567,8 @@ export async function recordAcquisitionsAndUpgrades({
     const preHeld = preHeldSnapshot[cid] !== undefined ? preHeldSnapshot[cid] : preHeldSnapshot[String(cid)];
     const postHeld = postHeldSnapshot[cid] !== undefined ? postHeldSnapshot[cid] : postHeldSnapshot[String(cid)];
 
+    let entry = null;
+
     // 1. Subject Acquired: was unheld, now held
     if ((preHeld === null || preHeld === undefined) && (postHeld !== null && postHeld !== undefined)) {
       const course = courses.find((c) => idEquals(c.courseCreationId, cid));
@@ -575,22 +577,13 @@ export async function recordAcquisitionsAndUpgrades({
         ? (section.sectionCode || section.sectionName)
         : (idEquals(postHeld, wantedId) ? subject.sectionCode : String(postHeld));
 
-      const entry = {
+      entry = {
         tier: 'ambient',
         type: 'acquired',
         title: 'Subject acquired',
         cause: `${subject.courseCode} (${secCode})`,
         timestamp: now,
       };
-
-      await appendLedgerEntry({
-        entry,
-        storageApi,
-        notificationsApi,
-        alarmsApi,
-        now,
-      });
-      emittedEntries.push(entry);
     }
     // 2. Section Upgraded: was held at a non-wanted section, now held at Wanted Section
     else if (
@@ -599,14 +592,16 @@ export async function recordAcquisitionsAndUpgrades({
       !idEquals(preHeld, wantedId) &&
       idEquals(postHeld, wantedId)
     ) {
-      const entry = {
+      entry = {
         tier: 'ambient',
         type: 'upgraded',
         title: 'Section upgraded',
         cause: `${subject.courseCode} (${subject.sectionCode})`,
         timestamp: now,
       };
+    }
 
+    if (entry) {
       await appendLedgerEntry({
         entry,
         storageApi,
