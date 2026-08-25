@@ -1,0 +1,681 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  PAGE_STATES,
+  INNER_LOOP_STATES,
+  isElementVisible,
+  captureDomSnapshot,
+  classifyPageState,
+  startInnerLoop,
+  handleContentMessage,
+} from '../content/classifier.js';
+
+// Minimal mock DOM node builder for headless Node testing
+function createMockElement({
+  id = '',
+  tagName = 'div',
+  classList = [],
+  style = {},
+  rect = { width: 100, height: 50, top: 0, bottom: 50 },
+  children = [],
+  innerHTML = '',
+  outerHTML = '',
+  hidden = false,
+} = {}) {
+  const classes = new Set(classList);
+  const elem = {
+    id,
+    tagName: tagName.toUpperCase(),
+    classList: {
+      contains: (cls) => classes.has(cls),
+      add: (cls) => classes.add(cls),
+      remove: (cls) => classes.delete(cls),
+      toggle: (cls) => (classes.has(cls) ? classes.delete(cls) : classes.add(cls)),
+      get length() { return classes.size; },
+      toString: () => Array.from(classes).join(' '),
+    },
+    className: Array.from(classes).join(' '),
+    style: { ...style },
+    hidden,
+    children: [...children],
+    getBoundingClientRect: () => ({ ...rect }),
+    querySelector: (selector) => {
+      return findElement(elem, selector);
+    },
+    querySelectorAll: (selector) => {
+      const results = [];
+      findAllElements(elem, selector, results);
+      return results;
+    },
+    matches: (selector) => matchesSelector(elem, selector),
+  };
+
+  Object.defineProperty(elem, 'innerHTML', {
+    get: () => innerHTML || elem.children.map(c => c.outerHTML || '').join(''),
+    set: (val) => { innerHTML = val; },
+  });
+
+  Object.defineProperty(elem, 'outerHTML', {
+    get: () => outerHTML || `<${tagName.toLowerCase()} id="${id}" class="${Array.from(classes).join(' ')}">${elem.innerHTML}</${tagName.toLowerCase()}>`,
+    set: (val) => { outerHTML = val; },
+  });
+
+  return elem;
+}
+
+function matchesSelector(elem, selector) {
+  if (!elem || !selector) return false;
+  const parts = selector.trim().split(/\s+/);
+  if (parts.length > 1) {
+    return false;
+  }
+  const sel = parts[0];
+  if (sel.startsWith('#')) {
+    const [idPart, classPart] = sel.slice(1).split('.');
+    if (elem.id !== idPart) return false;
+    if (classPart && !elem.classList.contains(classPart)) return false;
+    return true;
+  }
+  if (sel.startsWith('.')) {
+    return elem.classList.contains(sel.slice(1));
+  }
+  if (sel === 'form[action*="Login"]' || sel === 'form[action*="login"]') {
+    return elem.tagName === 'FORM' && (elem.action?.toLowerCase().includes('login') || elem.id?.toLowerCase().includes('login'));
+  }
+  return elem.tagName.toLowerCase() === sel.toLowerCase();
+}
+
+function findElement(root, selector) {
+  if (!root) return null;
+  const sel = selector.trim();
+
+  // Scoped selector: e.g. '#tblRegularCourses tbody tr'
+  const segments = sel.split(/\s+/);
+  if (segments.length === 2) {
+    const [parentSel, childSel] = segments;
+    const parent = findElement(root, parentSel);
+    return parent ? findElement(parent, childSel) : null;
+  }
+
+  for (const child of root.children || []) {
+    if (matchesSelector(child, sel)) return child;
+    const found = findElement(child, sel);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findAllElements(root, selector, results = []) {
+  if (!root) return results;
+  const sel = selector.trim();
+
+  // Selector like "tbody tr" or "tr"
+  const segments = sel.split(/\s+/);
+  if (segments.length === 2) {
+    const [parentSel, childSel] = segments;
+    const parents = [];
+    findAllElements(root, parentSel, parents);
+    for (const parent of parents) {
+      findAllElements(parent, childSel, results);
+    }
+    return results;
+  }
+
+  for (const child of root.children || []) {
+    if (matchesSelector(child, sel)) results.push(child);
+    findAllElements(child, selector, results);
+  }
+  return results;
+}
+
+function createMockDocument({
+  title = 'Enlistment',
+  body = null,
+  elements = [],
+  location = {
+    hostname: 'archershub.dlsu.edu.ph',
+    pathname: '/Enlistment_V2/Index',
+    href: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index',
+  },
+} = {}) {
+  const elementsById = new Map();
+  const rootBody = body || createMockElement({ tagName: 'body', children: elements });
+
+  function indexElements(node) {
+    if (node.id) {
+      elementsById.set(node.id, node);
+    }
+    for (const child of node.children || []) {
+      indexElements(child);
+    }
+  }
+  indexElements(rootBody);
+
+  const doc = {
+    title,
+    location: { ...location },
+    body: rootBody,
+    documentElement: {
+      get outerHTML() {
+        return `<html><head><title>${doc.title}</title></head>${rootBody.outerHTML}</html>`;
+      },
+    },
+    getElementById: (id) => elementsById.get(id) || null,
+    querySelector: (selector) => {
+      if (selector.startsWith('#') && !selector.includes(' ') && !selector.includes('.')) {
+        return elementsById.get(selector.slice(1)) || null;
+      }
+      return findElement(rootBody, selector);
+    },
+    querySelectorAll: (selector) => {
+      const results = [];
+      findAllElements(rootBody, selector, results);
+      return results;
+    },
+  };
+
+  return doc;
+}
+
+function createMockWindow({ document = null, location = null } = {}) {
+  return {
+    document,
+    location: location || (document && document.location) || {
+      hostname: 'archershub.dlsu.edu.ph',
+      pathname: '/Enlistment_V2/Index',
+      href: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index',
+    },
+    getComputedStyle: (elem) => elem?.style || {},
+  };
+}
+
+describe('classifier module', () => {
+  describe('PAGE_STATES and INNER_LOOP_STATES', () => {
+    it('defines exactly the 12 named states from SPEC §6', () => {
+      const expectedStates = [
+        'NoTab',
+        'LoggedOut',
+        'WrongPage',
+        'NotInjected',
+        'Settling',
+        'ActivityClosed',
+        'Step1Unconfigured',
+        'Step1Configured',
+        'Step2Unbound',
+        'Step2Bound',
+        'Step3Reached',
+        'Unrecognised',
+      ];
+
+      assert.equal(Object.values(PAGE_STATES).length, 12);
+      for (const st of expectedStates) {
+        assert.ok(Object.values(PAGE_STATES).includes(st), `Missing state: ${st}`);
+      }
+    });
+
+    it('defines INNER_LOOP_STATES containing exactly states 5 through 9', () => {
+      const innerArray = Array.from(INNER_LOOP_STATES);
+      assert.deepEqual(innerArray.sort(), [
+        'ActivityClosed',
+        'Settling',
+        'Step1Configured',
+        'Step1Unconfigured',
+        'Step2Unbound',
+      ].sort());
+    });
+  });
+
+  describe('isElementVisible', () => {
+    it('returns false for null or undefined element', () => {
+      assert.equal(isElementVisible(null), false);
+      assert.equal(isElementVisible(undefined), false);
+    });
+
+    it('returns false when display is none, visibility is hidden, or opacity is 0', () => {
+      const elemNone = createMockElement({ style: { display: 'none' } });
+      assert.equal(isElementVisible(elemNone), false);
+
+      const elemHidden = createMockElement({ style: { visibility: 'hidden' } });
+      assert.equal(isElementVisible(elemHidden), false);
+
+      const elemOpacity0 = createMockElement({ style: { opacity: '0' } });
+      assert.equal(isElementVisible(elemOpacity0), false);
+    });
+
+    it('returns false when element has hidden attribute', () => {
+      const elem = createMockElement({ hidden: true });
+      assert.equal(isElementVisible(elem), false);
+    });
+
+    it('returns true when element is visible', () => {
+      const elem = createMockElement({ style: { display: 'block', visibility: 'visible', opacity: '1' } });
+      assert.equal(isElementVisible(elem), true);
+    });
+  });
+
+  describe('captureDomSnapshot', () => {
+    it('captures full outerHTML, title, url, and timestamp', () => {
+      const doc = createMockDocument({
+        title: 'ArchersHub - Unknown View',
+        elements: [createMockElement({ id: 'lockedContainer', innerHTML: '<p>Enlistment Locked</p>' })],
+      });
+      const win = createMockWindow({ document: doc });
+      const snapshot = captureDomSnapshot(doc, win);
+
+      assert.match(snapshot.html, /Enlistment Locked/);
+      assert.equal(snapshot.title, 'ArchersHub - Unknown View');
+      assert.equal(snapshot.url, 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index');
+      assert.ok(typeof snapshot.timestamp === 'number');
+    });
+  });
+
+  describe('classifyPageState — 12 Page States', () => {
+    it('State 1: NoTab — returns NoTab when document or tab is missing', () => {
+      assert.equal(classifyPageState({ hasTab: false }).state, PAGE_STATES.NO_TAB);
+      assert.equal(classifyPageState({ document: null, window: null }).state, PAGE_STATES.NO_TAB);
+    });
+
+    it('State 2: LoggedOut — detected via login title or login form on tab', () => {
+      const docWithTitle = createMockDocument({
+        title: 'Login - ArchersHub',
+        location: { hostname: 'archershub.dlsu.edu.ph', pathname: '/' },
+      });
+      const win = createMockWindow({ document: docWithTitle });
+      assert.equal(classifyPageState({ document: docWithTitle, window: win }).state, PAGE_STATES.LOGGED_OUT);
+
+      const docWithForm = createMockDocument({
+        title: 'ArchersHub Portal',
+        location: { hostname: 'archershub.dlsu.edu.ph', pathname: '/Account/Login' },
+        elements: [createMockElement({ id: 'divLogin' })],
+      });
+      assert.equal(classifyPageState({ document: docWithForm, window: createMockWindow({ document: docWithForm }) }).state, PAGE_STATES.LOGGED_OUT);
+    });
+
+    it('State 3: WrongPage — on archershub.dlsu.edu.ph but not an enlistment path without enlistment shell', () => {
+      const doc = createMockDocument({
+        title: 'Student Dashboard',
+        location: {
+          hostname: 'archershub.dlsu.edu.ph',
+          pathname: '/Student/Dashboard',
+          href: 'https://archershub.dlsu.edu.ph/Student/Dashboard',
+        },
+        elements: [createMockElement({ id: 'dashboardWidget' })],
+      });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.WRONG_PAGE);
+    });
+
+    it('State 4: NotInjected — returns NotInjected when injected flag is explicitly false', () => {
+      const doc = createMockDocument();
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win, injected: false }).state, PAGE_STATES.NOT_INJECTED);
+    });
+
+    it('State 5: Settling — detected via body.loader-active', () => {
+      const body = createMockElement({ tagName: 'body', classList: ['loader-active'] });
+      const doc = createMockDocument({ body });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.SETTLING);
+    });
+
+    it('State 5: Settling — detected via #MyLoader visible', () => {
+      const myLoader = createMockElement({ id: 'MyLoader', style: { display: 'block' } });
+      const doc = createMockDocument({ elements: [myLoader] });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.SETTLING);
+    });
+
+    it('State 5: Settling — detected via .full-page-loader visible', () => {
+      const loader = createMockElement({ classList: ['full-page-loader'], style: { display: 'block' } });
+      const doc = createMockDocument({ elements: [loader] });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.SETTLING);
+    });
+
+    it('State 6: ActivityClosed — detected via #divAlertMessage visible', () => {
+      const alertMsg = createMockElement({ id: 'divAlertMessage', style: { display: 'block' } });
+      const doc = createMockDocument({ elements: [alertMsg] });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.ACTIVITY_CLOSED);
+    });
+
+    it('State 7: Step1Unconfigured — detected via #STEP1.active and #btnAdd visible', () => {
+      const step1 = createMockElement({ id: 'STEP1', classList: ['active'] });
+      const btnAdd = createMockElement({ id: 'btnAdd', style: { display: 'inline-block' } });
+      const doc = createMockDocument({ elements: [step1, btnAdd] });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.STEP1_UNCONFIGURED);
+    });
+
+    it('State 8: Step1Configured — detected via #btnAdd present and display: none', () => {
+      const step1 = createMockElement({ id: 'STEP1', classList: ['active'] });
+      const btnAdd = createMockElement({ id: 'btnAdd', style: { display: 'none' } });
+      const doc = createMockDocument({ elements: [step1, btnAdd] });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.STEP1_CONFIGURED);
+    });
+
+    it('State 9: Step2Unbound — detected via #STEP2.active and #tblRegularCourses empty', () => {
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [] });
+      const doc = createMockDocument({ elements: [step2, tbl] });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.STEP2_UNBOUND);
+    });
+
+    it('State 10: Step2Bound — detected via #STEP2.active, #tblRegularCourses has rows, #btnEnlistment visible', () => {
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const tbody = createMockElement({
+        tagName: 'tbody',
+        children: [
+          createMockElement({ tagName: 'tr', innerHTML: '<td>MATH101</td>' }),
+          createMockElement({ tagName: 'tr', innerHTML: '<td>CS101</td>' }),
+        ],
+      });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [tbody] });
+      const btnEnlistment = createMockElement({ id: 'btnEnlistment', style: { display: 'inline-block' } });
+      const doc = createMockDocument({ elements: [step2, tbl, btnEnlistment] });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.STEP2_BOUND);
+    });
+
+    it('State 11: Step3Reached — detected via #STEP3.active', () => {
+      const step3 = createMockElement({ id: 'STEP3', classList: ['active'] });
+      const doc = createMockDocument({ elements: [step3] });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.STEP3_REACHED);
+    });
+
+    it('State 12: Unrecognised — captures snapshot when no known state matches', () => {
+      const unknownDiv = createMockElement({ id: 'unknownModal', innerHTML: '<h3>System Maintenance</h3>' });
+      const doc = createMockDocument({ elements: [unknownDiv] });
+      const win = createMockWindow({ document: doc });
+      const res = classifyPageState({ document: doc, window: win });
+
+      assert.equal(res.state, PAGE_STATES.UNRECOGNISED);
+      assert.ok(res.domSnapshot);
+      assert.match(res.domSnapshot, /System Maintenance/);
+      assert.ok(res.snapshot);
+      assert.equal(res.snapshot.title, 'Enlistment');
+    });
+  });
+
+  describe('Classification safety rules and order precedence', () => {
+    it('precedence: Settling loader overlay on Step2Bound page returns Settling', () => {
+      const body = createMockElement({ tagName: 'body', classList: ['loader-active'] });
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const tbody = createMockElement({
+        tagName: 'tbody',
+        children: [createMockElement({ tagName: 'tr' })],
+      });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [tbody] });
+      const btnEnlistment = createMockElement({ id: 'btnEnlistment', style: { display: 'inline-block' } });
+
+      const doc = createMockDocument({ body, elements: [step2, tbl, btnEnlistment] });
+      const win = createMockWindow({ document: doc });
+
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.SETTLING);
+    });
+
+    it('precedence: LoggedOut title on a page with #STEP1 returns LoggedOut', () => {
+      const step1 = createMockElement({ id: 'STEP1', classList: ['active'] });
+      const btnAdd = createMockElement({ id: 'btnAdd', style: { display: 'inline-block' } });
+      const doc = createMockDocument({
+        title: 'Login - ArchersHub',
+        elements: [step1, btnAdd],
+      });
+      const win = createMockWindow({ document: doc });
+
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.LOGGED_OUT);
+    });
+
+    it('scopes pane checks strictly to #STEP1|2|3 by ID, ignoring PayatCampus / PayatBank / Online with .tab-pane.active', () => {
+      // Payment panes also carry .tab-pane.active on ArchersHub
+      const payAtCampus = createMockElement({ id: 'PayatCampus', classList: ['tab-pane', 'active'] });
+      const payAtBank = createMockElement({ id: 'PayatBank', classList: ['tab-pane', 'active'] });
+      const online = createMockElement({ id: 'Online', classList: ['tab-pane', 'active'] });
+
+      const doc = createMockDocument({ elements: [payAtCampus, payAtBank, online] });
+      const win = createMockWindow({ document: doc });
+
+      // Should not trigger Step1/2/3, falls to Unrecognised
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.UNRECOGNISED);
+    });
+
+    it('addresses buttons strictly by ID, not class (.common-submit-btn) or label ("Save & Next")', () => {
+      // Create element with same class as #btnEnlistment (#btnConfirmEnlistment shares .common-submit-btn)
+      const fakeBtn = createMockElement({
+        id: 'btnConfirmEnlistment',
+        classList: ['common-submit-btn'],
+        innerHTML: 'Save & Next',
+        style: { display: 'inline-block' },
+      });
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const tbody = createMockElement({ tagName: 'tbody', children: [createMockElement({ tagName: 'tr' })] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [tbody] });
+
+      // Without #btnEnlistment, should NOT match Step2Bound even though another button has common-submit-btn
+      const doc = createMockDocument({ elements: [step2, tbl, fakeBtn] });
+      const win = createMockWindow({ document: doc });
+
+      assert.notEqual(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.STEP2_BOUND);
+    });
+
+    it('ignores toast elements as state signals', () => {
+      const toast = createMockElement({
+        id: 'toast-container',
+        classList: ['toast', 'toast-success'],
+        innerHTML: 'Saved successfully',
+        style: { display: 'block' },
+      });
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [] });
+
+      const doc = createMockDocument({ elements: [toast, step2, tbl] });
+      const win = createMockWindow({ document: doc });
+
+      // Remains Step2Unbound, ignoring toast
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.STEP2_UNBOUND);
+    });
+  });
+
+  describe('250ms inner reclassification loop', () => {
+    it('runs while in states 5–9 and stops once Step2Bound (state 10) is reached', () => {
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [] }); // Starts unbound (state 9)
+      const btnEnlistment = createMockElement({ id: 'btnEnlistment', style: { display: 'inline-block' } });
+      const doc = createMockDocument({ elements: [step2, tbl, btnEnlistment] });
+      const win = createMockWindow({ document: doc });
+
+      const statesObserved = [];
+      let stopCalled = false;
+      let finalResult = null;
+
+      // Mock timer to control ticks manually
+      const timers = [];
+      const mockSetTimeout = (fn, delay) => {
+        const id = timers.length + 1;
+        timers.push({ id, fn, delay });
+        return id;
+      };
+      const mockClearTimeout = () => {};
+
+      const loop = startInnerLoop({
+        document: doc,
+        window: win,
+        intervalMs: 250,
+        setTimeoutImpl: mockSetTimeout,
+        clearTimeoutImpl: mockClearTimeout,
+        onStateChange: (res) => {
+          statesObserved.push(res.state);
+        },
+        onStop: (res) => {
+          stopCalled = true;
+          finalResult = res;
+        },
+      });
+
+      // Initial tick: Step2Unbound (state 9) -> in inner loop
+      assert.equal(statesObserved.length, 1);
+      assert.equal(statesObserved[0], PAGE_STATES.STEP2_UNBOUND);
+      assert.equal(stopCalled, false);
+      assert.equal(timers.length, 1);
+      assert.equal(timers[0].delay, 250);
+
+      // Tick 2: still Step2Unbound
+      const tick1 = timers.shift();
+      tick1.fn();
+      assert.equal(stopCalled, false);
+      assert.equal(timers.length, 1);
+
+      // Mutate DOM to Step2Bound: table gains row
+      const tbody = createMockElement({
+        tagName: 'tbody',
+        children: [createMockElement({ tagName: 'tr' })],
+      });
+      tbl.children = [tbody];
+
+      // Tick 3: now Step2Bound (state 10) -> loop must stop!
+      const tick2 = timers.shift();
+      tick2.fn();
+
+      assert.equal(stopCalled, true);
+      assert.equal(finalResult.state, PAGE_STATES.STEP2_BOUND);
+      assert.equal(statesObserved[statesObserved.length - 1], PAGE_STATES.STEP2_BOUND);
+      assert.equal(timers.length, 0); // No more timers scheduled
+      assert.equal(loop.isRunning(), false);
+    });
+
+    it('stops immediately when Unrecognised state is reached and triggers snapshot capture', () => {
+      const alertMsg = createMockElement({ id: 'divAlertMessage', style: { display: 'block' } }); // Starts ActivityClosed (state 6)
+      const doc = createMockDocument({ elements: [alertMsg] });
+      const win = createMockWindow({ document: doc });
+
+      const statesObserved = [];
+      let finalResult = null;
+
+      const timers = [];
+      const mockSetTimeout = (fn, delay) => {
+        const id = timers.length + 1;
+        timers.push({ id, fn, delay });
+        return id;
+      };
+
+      const loop = startInnerLoop({
+        document: doc,
+        window: win,
+        setTimeoutImpl: mockSetTimeout,
+        onStateChange: (res) => statesObserved.push(res.state),
+        onStop: (res) => { finalResult = res; },
+      });
+
+      assert.equal(statesObserved[0], PAGE_STATES.ACTIVITY_CLOSED);
+
+      // Mutate to an unrecognised state
+      alertMsg.style.display = 'none';
+
+      const tick = timers.shift();
+      tick.fn();
+
+      assert.equal(finalResult.state, PAGE_STATES.UNRECOGNISED);
+      assert.ok(finalResult.domSnapshot);
+      assert.equal(loop.isRunning(), false);
+    });
+
+    it('allows manual stop via returned handle', () => {
+      const step1 = createMockElement({ id: 'STEP1', classList: ['active'] });
+      const btnAdd = createMockElement({ id: 'btnAdd', style: { display: 'inline-block' } }); // Step1Unconfigured
+      const doc = createMockDocument({ elements: [step1, btnAdd] });
+      const win = createMockWindow({ document: doc });
+
+      let cleared = false;
+      const mockClearTimeout = () => { cleared = true; };
+      const mockSetTimeout = () => 123;
+
+      const handle = startInnerLoop({
+        document: doc,
+        window: win,
+        setTimeoutImpl: mockSetTimeout,
+        clearTimeoutImpl: mockClearTimeout,
+      });
+
+      assert.equal(handle.isRunning(), true);
+      handle.stop();
+      assert.equal(handle.isRunning(), false);
+      assert.equal(cleared, true);
+    });
+  });
+
+  describe('handleContentMessage', () => {
+    it('handles PING message by replying with ok: true, pong: true', () => {
+      let response = null;
+      handleContentMessage({ type: 'PING' }, {}, (res) => {
+        response = res;
+      });
+      assert.deepEqual(response, { ok: true, pong: true });
+
+      response = null;
+      handleContentMessage('ping', {}, (res) => {
+        response = res;
+      });
+      assert.deepEqual(response, { ok: true, pong: true });
+    });
+
+    it('handles CLASSIFY_PAGE message by returning classification result', () => {
+      const step3 = createMockElement({ id: 'STEP3', classList: ['active'] });
+      const doc = createMockDocument({ elements: [step3] });
+      const win = createMockWindow({ document: doc });
+
+      let response = null;
+      handleContentMessage({ type: 'CLASSIFY_PAGE' }, {}, (res) => {
+        response = res;
+      }, {
+        document: doc,
+        window: win,
+      });
+
+      assert.equal(response.success, true);
+      assert.equal(response.state, PAGE_STATES.STEP3_REACHED);
+    });
+
+    it('handles START_INNER_LOOP and STOP_INNER_LOOP messages', () => {
+      const step1 = createMockElement({ id: 'STEP1', classList: ['active'] });
+      const btnAdd = createMockElement({ id: 'btnAdd', style: { display: 'inline-block' } });
+      const doc = createMockDocument({ elements: [step1, btnAdd] });
+      const win = createMockWindow({ document: doc });
+
+      let activeLoopRef = null;
+      let startResponse = null;
+
+      const sentMessages = [];
+      const mockSendMessage = (msg) => sentMessages.push(msg);
+
+      handleContentMessage({ type: 'START_INNER_LOOP' }, {}, (res) => {
+        startResponse = res;
+      }, {
+        document: doc,
+        window: win,
+        setActiveLoop: (l) => { activeLoopRef = l; },
+        sendMessage: mockSendMessage,
+      });
+
+      assert.equal(startResponse.success, true);
+      assert.equal(startResponse.isRunning, true);
+      assert.ok(activeLoopRef);
+      assert.ok(sentMessages.length > 0);
+      assert.equal(sentMessages[0].state, PAGE_STATES.STEP1_UNCONFIGURED);
+
+      let stopResponse = null;
+      handleContentMessage({ type: 'STOP_INNER_LOOP' }, {}, (res) => {
+        stopResponse = res;
+      }, {
+        activeLoop: activeLoopRef,
+      });
+
+      assert.equal(stopResponse.success, true);
+      assert.equal(stopResponse.isRunning, false);
+      assert.equal(activeLoopRef.isRunning(), false);
+    });
+  });
+});
+

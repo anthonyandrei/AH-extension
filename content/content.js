@@ -1,97 +1,53 @@
-function selectSubjectSection(subject, section) {
-    try {
-        // Find the row containing this subject
-        const rows = document.querySelectorAll('tbody tr, table tr');
-        let targetRow = null;
-        
-        for (const row of rows) {
-            const cells = row.querySelectorAll('td');
-            const rowText = row.innerText.toUpperCase();
-            
-            if (rowText.includes(subject)) {
-                targetRow = row;
-                break;
-            }
-        }
-        
-        if (!targetRow) {
-            console.warn(`Subject '${subject}' not found in the table`);
-            return { success: false, subject, section, reason: 'Subject not found' };
-        }
-        
-        // Find and check the checkbox in this row
-        const checkbox = targetRow.querySelector('input[type="checkbox"]');
-        if (!checkbox) {
-            console.warn(`No checkbox found for subject '${subject}'`);
-            return { success: false, subject, section, reason: 'No checkbox found' };
-        }
-        
-        if (!checkbox.checked) {
-            checkbox.click();
-            checkbox.checked = true;
-            checkbox.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        
-        // Find and select the section dropdown
-        const dropdown = targetRow.querySelector('select');
-        if (!dropdown) {
-            console.warn(`No dropdown found for subject '${subject}'`);
-            return { success: false, subject, section, reason: 'No dropdown found' };
-        }
-        
-        // Try to find the option with matching label or value
-        let option = Array.from(dropdown.querySelectorAll('option')).find(opt => 
-            opt.textContent.trim().toUpperCase().includes(section) || 
-            opt.value.toUpperCase().includes(section)
-        );
-        
-        if (!option) {
-            console.warn(`Section '${section}' not found for subject '${subject}'`);
-            return { success: false, subject, section, reason: 'Section not found' };
-        }
-        
-        dropdown.value = option.value;
-        dropdown.dispatchEvent(new Event('change', { bubbles: true }));
-        
-        console.log(`Successfully selected ${subject} - ${section}`);
-        return { success: true, subject, section };
-        
-    } catch (error) {
-        console.error(`Error selecting ${subject} - ${section}:`, error);
-        return { success: false, subject, section, reason: error.message };
-    }
+/**
+ * ArchersHub Enlistment Automator - Content Script
+ * Classification and DOM interaction surface.
+ */
+
+let classifierModule = null;
+let activeLoop = null;
+
+async function getClassifier() {
+  if (classifierModule) return classifierModule;
+  try {
+    const src = chrome.runtime.getURL('content/classifier.js');
+    classifierModule = await import(src);
+    return classifierModule;
+  } catch (err) {
+    console.error('Failed to import classifier module:', err);
+    return null;
+  }
 }
 
-function isFullPageLoaderVisible() {
-    if (document.body && document.body.classList.contains('loader-active')) {
-        return true;
-    }
+// Runtime message listener for background worker / popup requests
+if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    getClassifier()
+      .then((mod) => {
+        if (!mod || !mod.handleContentMessage) {
+          sendResponse({ success: false, error: 'Classifier not initialized' });
+          return;
+        }
+        mod.handleContentMessage(message, sender, sendResponse, {
+          document,
+          window,
+          location: window.location,
+          activeLoop,
+          setActiveLoop: (l) => {
+            activeLoop = l;
+          },
+          sendMessage: (msg) => {
+            try {
+              chrome.runtime.sendMessage(msg);
+            } catch (_) {}
+          },
+        });
+      })
+      .catch((err) => {
+        sendResponse({ success: false, error: err.message });
+      });
 
-    const myLoader = document.querySelector('#MyLoader');
-    if (!myLoader) {
-        return false;
-    }
-
-    if (isElementVisible(myLoader)) {
-        return true;
-    }
-
-    const fullPageLoader = myLoader.querySelector('.full-page-loader');
-    return isElementVisible(fullPageLoader);
-}
-
-function isElementVisible(element) {
-    if (!element) {
-        return false;
-    }
-
-    const style = window.getComputedStyle(element);
-    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) {
-        return false;
-    }
-
-    const rect = element.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
+    return true; // Asynchronous message response
+  });
 }
 
 console.log('ArchersHub Enlistment Automator content script loaded');
