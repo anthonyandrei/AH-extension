@@ -1286,6 +1286,23 @@ export async function executePass({
       });
     }
 
+    // Immediately steer Owned Tab back to Step 2 for subsequent passes (with updated reconciliation)
+    if (tabsApi && ownedTabId) {
+      try {
+        await steerOwnedTab({
+          tabId: ownedTabId,
+          tabsApi,
+          storageApi,
+          actionApi,
+          alarmsApi,
+          notificationsApi,
+          reconciliation: postReconciliation,
+          baseUrl,
+          now,
+        });
+      } catch (_) {}
+    }
+
     updateBadge({
       state: 'watching',
       unresolvedCount: postReconciliation.unresolvedCount,

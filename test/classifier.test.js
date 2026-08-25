@@ -663,6 +663,30 @@ describe('classifier module', () => {
       assert.equal(loop.isRunning(), false);
     });
 
+    it('STEER_TAB auto-acts on Step3Reached to bind course list', () => {
+      let divBindClicked = false;
+      const step3 = createMockElement({ id: 'STEP3', classList: ['active'] });
+      const divBind = createMockElement({
+        id: 'DivBindCourseList',
+        tagName: 'a',
+        onClick: () => { divBindClicked = true; },
+      });
+      const doc = createMockDocument({ elements: [step3, divBind] });
+      const win = createMockWindow({ document: doc });
+
+      let responsePayload = null;
+      handleContentMessage({ type: 'STEER_TAB' }, {}, (res) => {
+        responsePayload = res;
+      }, {
+        document: doc,
+        window: win,
+        location: doc.location,
+      });
+
+      assert.equal(divBindClicked, true, 'STEER_TAB must auto-act on Step3Reached by clicking #DivBindCourseList');
+      assert.equal(responsePayload?.success, true);
+    });
+
     it('allows manual stop via returned handle', () => {
       const step1 = createMockElement({ id: 'STEP1', classList: ['active'] });
       const btnAdd = createMockElement({ id: 'btnAdd', style: { display: 'inline-block' } }); // Step1Unconfigured
@@ -908,6 +932,45 @@ describe('classifier module', () => {
       assert.equal(result.success, false);
       assert.equal(result.action, 'suspend');
       assert.equal(result.state, PAGE_STATES.LOGGED_OUT);
+    });
+
+    it('Step3Reached: clicks a#DivBindCourseList to bind course list and switch back to Step 2', () => {
+      let divBindClicked = false;
+      const divBind = createMockElement({
+        id: 'DivBindCourseList',
+        tagName: 'a',
+        onClick: () => { divBindClicked = true; },
+      });
+      const step3 = createMockElement({ id: 'STEP3', classList: ['active'] });
+      const doc = createMockDocument({ elements: [step3, divBind] });
+      const win = createMockWindow({ document: doc });
+
+      const result = executeStateAction({ document: doc, window: win });
+
+      assert.equal(result.success, true);
+      assert.equal(result.action, 'bind_course_list');
+      assert.equal(result.state, PAGE_STATES.STEP3_REACHED);
+      assert.equal(divBindClicked, true);
+    });
+
+    it('Step3Reached: navigates location.href to /Enlistment_V2/Index when DivBindCourseList is missing', () => {
+      const step3 = createMockElement({ id: 'STEP3', classList: ['active'] });
+      const doc = createMockDocument({
+        elements: [step3],
+        location: {
+          hostname: 'archershub.dlsu.edu.ph',
+          pathname: '/Enlistment_V2/Index',
+          href: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index',
+        },
+      });
+      const win = createMockWindow({ document: doc });
+
+      const result = executeStateAction({ document: doc, window: win });
+
+      assert.equal(result.success, true);
+      assert.equal(result.action, 'navigate');
+      assert.equal(result.state, PAGE_STATES.STEP3_REACHED);
+      assert.match(doc.location.href, /\/Enlistment_V2\/Index/);
     });
   });
 

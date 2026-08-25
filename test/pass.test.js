@@ -1152,6 +1152,94 @@ describe('pass module', () => {
       assert.equal(notifications._getNotifications().length, 0);
     });
 
+    it('on partial strike with pending Wanted Sections: triggers steering on Owned Tab back to Step 2', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' },
+            { courseCreationId: 102, courseCode: 'MATH101', sectionCreationId: 601, sectionCode: 'M01' },
+          ],
+        },
+        ownedTabId: 101,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      const sentMessages = [];
+      tabs.sendMessage = async (id, msg) => {
+        sentMessages.push(msg.type);
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          return { success: true, clicked: true, saveGateApproved: true };
+        }
+        if (msg.type === 'STEER_TAB') {
+          return { success: true, state: PAGE_STATES.STEP3_REACHED };
+        }
+        return { success: true };
+      };
+
+      let fetchCallCount = 0;
+      const mockFetch = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `
+              <input id="hdfAcademicSessionId" value="10" />
+              <input id="hdfRuleAllocationId" value="20" />
+              <input id="hdfEnlistmentRuleId" value="30" />
+            `,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          fetchCallCount++;
+          // First read: both unheld
+          // Second read: 101 acquired, 102 still unheld (partial strike)
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: fetchCallCount === 1 ? null : 502, IS_REGISTERED: fetchCallCount === 1 ? 0 : 1 },
+                { COURSE_CREATION_ID: 102, COURSE_CODE: 'MATH101', SECTION_CREATION_ID: null, IS_REGISTERED: 0 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'G02 {Avail. Slots: 5}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 5000,
+      });
+
+      assert.equal(result.strikePerformed, true);
+      assert.equal(result.allSatisfied, false);
+      assert.equal(result.unresolvedCount, 1);
+      // Verify STEER_TAB was sent to re-navigate the Owned Tab back to Step 2
+      assert.ok(sentMessages.includes('STEER_TAB'), 'STEER_TAB message must be sent after partial strike');
+    });
+
     it('on actionable dispositions when strike upgrades a backup section: logs Ambient "Section upgraded" ledger entry', async () => {
       const storage = createMockStorage({
         vigil: { state: 'watching', lastChangeAt: 1000 },

@@ -406,6 +406,21 @@ export function handleContentMessage(message, sender, sendResponse, deps = {}) {
       deps.activeLoop.stop();
     }
     const autoAct = msgType === 'STEER_TAB' || Boolean(message?.autoAct);
+    if (autoAct) {
+      const initialClassification = classifyFn({
+        document: deps.document,
+        window: deps.window,
+        location: deps.location,
+      });
+      if (initialClassification.state === PAGE_STATES.STEP3_REACHED) {
+        executeActionFn({
+          state: PAGE_STATES.STEP3_REACHED,
+          document: deps.document,
+          window: deps.window,
+          location: deps.location,
+        });
+      }
+    }
     let latestResult = null;
     const loop = startInnerLoopFn({
       document: deps.document,
@@ -725,8 +740,18 @@ export function executeStateAction(options = {}) {
     case PAGE_STATES.STEP2_BOUND:
       return { success: true, action: 'bound', state };
 
-    case PAGE_STATES.STEP3_REACHED:
+    case PAGE_STATES.STEP3_REACHED: {
+      const divBind = getById(doc, 'DivBindCourseList');
+      if (divBind && typeof divBind.click === 'function') {
+        divBind.click();
+        return { success: true, action: 'bind_course_list', state };
+      }
+      if (loc) {
+        loc.href = '/Enlistment_V2/Index';
+        return { success: true, action: 'navigate', state };
+      }
       return { success: true, action: 'step3_reached', state };
+    }
 
     case PAGE_STATES.WRONG_PAGE: {
       if (loc) {

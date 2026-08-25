@@ -399,6 +399,7 @@ export async function steerOwnedTab({
   actionApi = typeof chrome !== 'undefined' ? chrome?.action : null,
   alarmsApi = typeof chrome !== 'undefined' ? chrome?.alarms : null,
   notificationsApi = typeof chrome !== 'undefined' ? chrome?.notifications : null,
+  reconciliation = null,
   baseUrl = 'https://archershub.dlsu.edu.ph',
   now = Date.now(),
 } = {}) {
@@ -459,6 +460,27 @@ export async function steerOwnedTab({
         await tabsApi.update(tabId, { url: `${baseUrl}/Enlistment_V2/Index` });
       }
       return { action: 'navigate_enlistment', state: PAGE_STATES.WRONG_PAGE };
+    }
+
+    if (response?.state === PAGE_STATES.STEP3_REACHED) {
+      let isWatching = true;
+      let allSatisfied = false;
+
+      if (reconciliation) {
+        allSatisfied = Boolean(reconciliation.allSatisfied);
+      } else if (storageApi?.get) {
+        const vigilData = await storageApi.get(['vigil', 'reconciliation']);
+        isWatching = vigilData?.vigil?.state === 'watching';
+        allSatisfied = Boolean(vigilData?.reconciliation?.allSatisfied);
+      }
+
+      if (isWatching && !allSatisfied) {
+        if (tabsApi.update) {
+          await tabsApi.update(tabId, { url: `${baseUrl}/Enlistment_V2/Index` });
+        }
+        return { action: 'navigate_step2', state: PAGE_STATES.STEP3_REACHED };
+      }
+      return { action: 'step3_reached', state: PAGE_STATES.STEP3_REACHED };
     }
 
     return { action: 'steered', state: response?.state || 'unknown' };

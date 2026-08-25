@@ -2353,6 +2353,216 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
       assert.equal(messagesSent, 0, 'Must never send execution messages to tab on notification click');
     });
   });
+
+  describe('Multi-pass progression across partial strikes with Step3Reached steering (Issue #35)', () => {
+    it('handles Step3Reached after partial strike by steering Owned Tab to Step 2 and progressing to completion on subsequent pass without unnecessary re-navigation', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000000, startedAt: 1000000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CSARCH1', sectionCreationId: 501, sectionCode: 'S11' },
+            { courseCreationId: 102, courseCode: 'CSNET1', sectionCreationId: 601, sectionCode: 'X01' },
+          ],
+        },
+        ownedTabId: 101,
+        ledger: [],
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([
+        { id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index', active: false },
+      ]);
+
+      let currentDomState = PAGE_STATES.STEP2_BOUND;
+      const sentTabMessages = [];
+
+      tabs.sendMessage = async (id, msg) => {
+        sentTabMessages.push(msg.type);
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: currentDomState };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          // After strike click, ArchersHub advances DOM to Step 3
+          currentDomState = PAGE_STATES.STEP3_REACHED;
+          return { success: true, clicked: true, saveGateApproved: true };
+        }
+        if (msg.type === 'STEER_TAB') {
+          // Content script inner loop receives STEER_TAB and drives DOM back to Step 2
+          currentDomState = PAGE_STATES.STEP2_BOUND;
+          return { success: true, isRunning: false, state: PAGE_STATES.STEP2_BOUND };
+        }
+        return { success: true };
+      };
+
+      // Set up catalogue responses:
+      // Pass 1: S11 is available for CSARCH1; X01 is full for CSNET1
+      // Pass 1 post-write: CSARCH1 held at S11, CSNET1 unheld (partial strike!)
+      // Pass 2: CSARCH1 held at S11; X01 is now available for CSNET1
+      // Pass 2 post-write: CSARCH1 held at S11, CSNET1 held at X01 (complete!)
+      let catalogueCallCount = 0;
+      const mockFetch = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `
+              <input id="hdfAcademicSessionId" value="44" />
+              <input id="hdfRuleAllocationId" value="12" />
+              <input id="hdfEnlistmentRuleId" value="34" />
+            `,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          catalogueCallCount++;
+          if (catalogueCallCount === 1) {
+            // Pass 1 pre-write: 0 held
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({
+                CourseDetails: [
+                  { COURSE_CREATION_ID: 101, COURSE_CODE: 'CSARCH1', SECTION_CREATION_ID: null, IS_REGISTERED: 0 },
+                  { COURSE_CREATION_ID: 102, COURSE_CODE: 'CSNET1', SECTION_CREATION_ID: null, IS_REGISTERED: 0 },
+                ],
+              }),
+            };
+          }
+          if (catalogueCallCount === 2) {
+            // Pass 1 post-write: 101 held at 501 (S11), 102 still unheld
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({
+                CourseDetails: [
+                  { COURSE_CREATION_ID: 101, COURSE_CODE: 'CSARCH1', SECTION_CREATION_ID: 501, IS_REGISTERED: 1 },
+                  { COURSE_CREATION_ID: 102, COURSE_CODE: 'CSNET1', SECTION_CREATION_ID: null, IS_REGISTERED: 0 },
+                ],
+              }),
+            };
+          }
+          if (catalogueCallCount === 3) {
+            // Pass 2 pre-write: 101 held at 501, 102 unheld
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({
+                CourseDetails: [
+                  { COURSE_CREATION_ID: 101, COURSE_CODE: 'CSARCH1', SECTION_CREATION_ID: 501, IS_REGISTERED: 1 },
+                  { COURSE_CREATION_ID: 102, COURSE_CODE: 'CSNET1', SECTION_CREATION_ID: null, IS_REGISTERED: 0 },
+                ],
+              }),
+            };
+          }
+          // Pass 2 post-write: both 101 and 102 held!
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CSARCH1', SECTION_CREATION_ID: 501, IS_REGISTERED: 1 },
+                { COURSE_CREATION_ID: 102, COURSE_CODE: 'CSNET1', SECTION_CREATION_ID: 601, IS_REGISTERED: 1 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          if (catalogueCallCount <= 2) {
+            // Pass 1: only S11 (501) available
+            return {
+              ok: true,
+              status: 200,
+              json: async () => [
+                { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 501, SECTION_NAME: 'S11 {Avail. Slots: 10}' },
+              ],
+            };
+          }
+          // Pass 2: both S11 (501) and X01 (601) available
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 501, SECTION_NAME: 'S11 {Avail. Slots: 10}' },
+              { COURSE_CREATION_ID: 102, SECTION_CREATION_ID: 601, SECTION_NAME: 'X01 {Avail. Slots: 2}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      // ==========================================
+      // PASS 1: Partial strike executes for CSARCH1
+      // ==========================================
+      const pass1Result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 1002000,
+      });
+
+      assert.equal(pass1Result.strikePerformed, true);
+      assert.equal(pass1Result.allSatisfied, false);
+      assert.equal(pass1Result.unresolvedCount, 1);
+      assert.equal(pass1Result.state, 'watching');
+
+      const storeAfterPass1 = storage._getStore();
+      assert.equal(storeAfterPass1.vigil.state, 'watching');
+      assert.equal(action._getBadge().text, '1'); // 1 unresolved remaining (CSNET1)
+      assert.equal(action._getBadge().color, '#4285F4');
+
+      // Verify Ambient ledger event for CSARCH1 acquisition
+      const acquiredEntry1 = storeAfterPass1.ledger.find((e) => e.type === 'acquired');
+      assert.ok(acquiredEntry1);
+      assert.match(acquiredEntry1.cause, /CSARCH1/);
+
+      // Verify that steering was triggered to return Owned Tab from Step 3 to Step 2
+      assert.ok(sentTabMessages.includes('STEER_TAB'), 'Steering must be initiated after partial strike');
+      assert.equal(currentDomState, PAGE_STATES.STEP2_BOUND, 'Owned Tab must be restored to Step2Bound');
+
+      // ==========================================
+      // PASS 2: Subsequent strike for CSNET1
+      // ==========================================
+      const tabUrlBeforePass2 = (await tabs.get(101)).url;
+      sentTabMessages.length = 0; // Reset message tracker
+
+      const pass2Result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 1004000,
+      });
+
+      assert.equal(pass2Result.strikePerformed, true);
+      assert.equal(pass2Result.allSatisfied, true);
+      assert.equal(pass2Result.unresolvedCount, 0);
+      assert.equal(pass2Result.state, 'complete');
+
+      const storeAfterPass2 = storage._getStore();
+      assert.equal(storeAfterPass2.vigil.state, 'complete');
+      assert.equal(action._getBadge().text, '✓'); // Complete badge
+      assert.equal(action._getBadge().color, '#10B981');
+
+      // Verify Notice ledger event for completion
+      const completeEntry = storeAfterPass2.ledger.find((e) => e.type === 'complete');
+      assert.ok(completeEntry);
+      assert.equal(completeEntry.tier, 'notice');
+
+      // Verify second Ambient acquisition event for CSNET1
+      const acquiredEntry2 = storeAfterPass2.ledger.find((e) => e.type === 'acquired' && e.cause.includes('CSNET1'));
+      assert.ok(acquiredEntry2);
+
+      // Verify that no unnecessary STEER_TAB or re-navigation occurred on completion
+      assert.equal(sentTabMessages.includes('STEER_TAB'), false, 'Must not steer or re-navigate on completion');
+      assert.equal((await tabs.get(101)).url, tabUrlBeforePass2, 'Owned Tab URL must remain intact on completion');
+      assert.equal(currentDomState, PAGE_STATES.STEP3_REACHED, 'Owned Tab remains on Step 3 as evidence of completion');
+    });
+  });
 });
 
 

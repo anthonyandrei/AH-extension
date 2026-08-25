@@ -589,6 +589,58 @@ describe('tab-manager module', () => {
       assert.equal(updatedTab.url, 'https://archershub.dlsu.edu.ph/Student/Dashboard'); // URL unchanged!
       assert.equal(updatedTab.reloaded || 0, 0); // Not reloaded!
     });
+
+    it('Step3Reached: re-navigates Owned Tab to /Enlistment_V2/Index when Vigil is watching with pending Wanted Sections', async () => {
+      const tabs = createMockTabs();
+      const tab = await tabs.create({ url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' });
+      tab.messageHandler = () => ({ success: true, state: PAGE_STATES.STEP3_REACHED });
+
+      const storage = createMockStorage({
+        vigil: { state: 'watching' },
+        reconciliation: { allSatisfied: false, unresolvedCount: 1 },
+        ownedTabId: tab.id,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+
+      const result = await steerOwnedTab({
+        tabId: tab.id,
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+      });
+
+      assert.equal(result.action, 'navigate_step2');
+      assert.equal(result.state, PAGE_STATES.STEP3_REACHED);
+      const updatedTab = await tabs.get(tab.id);
+      assert.equal(updatedTab.url, 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index');
+    });
+
+    it('Step3Reached: does not re-navigate Owned Tab when all Wanted Sections are satisfied', async () => {
+      const tabs = createMockTabs();
+      const tab = await tabs.create({ url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' });
+      tab.messageHandler = () => ({ success: true, state: PAGE_STATES.STEP3_REACHED });
+
+      const storage = createMockStorage({
+        vigil: { state: 'watching' },
+        reconciliation: { allSatisfied: true, unresolvedCount: 0 },
+        ownedTabId: tab.id,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+
+      const result = await steerOwnedTab({
+        tabId: tab.id,
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+      });
+
+      assert.equal(result.action, 'step3_reached');
+      assert.equal(result.state, PAGE_STATES.STEP3_REACHED);
+    });
   });
 });
 
