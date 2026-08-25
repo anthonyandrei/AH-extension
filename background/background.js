@@ -2,7 +2,6 @@ import {
   rebuildAlarmsFromStorage,
   transitionArmedToWatching,
   performKeepalive,
-  checkSession,
 } from '../popup/arming.js';
 import {
   handleAlertRepeatAlarm,

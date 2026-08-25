@@ -1448,4 +1448,24 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
       assert.equal(storage._getStore().plan.startMode, 'now');
     });
   });
+
+  describe('Issue #28 Acceptance: Remove unused web-accessible resource and dead background import', () => {
+    it('manifest.json does not declare web_accessible_resources and contains only required permissions', () => {
+      const manifestRaw = fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf-8');
+      const manifest = JSON.parse(manifestRaw);
+
+      // Acceptance criterion 1: The unused web_accessible_resources entry is removed from the manifest.
+      assert.equal(manifest.web_accessible_resources, undefined);
+      assert.deepEqual(manifest.permissions, ['storage', 'alarms', 'tabs', 'notifications']);
+      assert.deepEqual(manifest.host_permissions, ['https://archershub.dlsu.edu.ph/*']);
+    });
+
+    it('background service worker does not import checkSession or declare unused imports', () => {
+      const backgroundSource = fs.readFileSync(new URL('../background/background.js', import.meta.url), 'utf-8');
+
+      // Acceptance criterion 2: The unused import in the background service worker is removed.
+      assert.equal(backgroundSource.includes('checkSession'), false);
+    });
+  });
 });
+
