@@ -9,6 +9,7 @@ import {
   armVigil,
 } from "./arming.js";
 import { filterLedgerEntries, formatEventTime, exportPassTail } from "./reporting.js";
+import { stopVigil } from "./pass.js";
 
 // DOM Elements
 const tabPlan = document.getElementById("tabPlan");
@@ -51,6 +52,9 @@ let catalogueData = null;
 let vigilData = null;
 let ledgerData = [];
 let passTailData = [];
+let reconciliationData = null;
+let isStopConfirming = false;
+let stopConfirmTimer = null;
 let reportFilter = "all";
 let startMode = "at-time";
 let isRefused = false;
@@ -308,17 +312,56 @@ function renderRunPanel() {
   if (state === "armed") {
     title = `Armed for ${formatDateTimeDisplay(vigilData.nextFireTime)}`;
     subtitle = "Scheduled. Pre-start keepalive active.";
+  } else if (state === "watching") {
+    if (reconciliationData) {
+      const satisfiedCount = (reconciliationData.dispositions || []).filter(
+        (d) => d.isSatisfied && d.wantedSectionCode !== null
+      ).length;
+      subtitle = `${reconciliationData.unresolvedCount} watching, ${satisfiedCount} satisfied`;
+    }
+  } else if (state === "complete") {
+    title = "Complete";
+    subtitle = "Every subject holds its Wanted Section";
+  } else if (state === "suspended") {
+    title = "Suspended";
+    subtitle = "Session logged out — probe active";
+  } else if (state === "aborted") {
+    title = "Aborted";
+    subtitle = "Unrecognised page state";
+  } else if (state === "stall") {
+    title = "Stall";
+    subtitle = "10 minutes without a complete pass";
   }
 
   const subjectsHtml = (currentPlan?.subjects || [])
-    .map(
-      (s) => `<tr>
+    .map((s) => {
+      const disp = (reconciliationData?.dispositions || []).find(
+        (d) => String(d.courseCreationId) === String(s.courseCreationId)
+      );
+      const isSatisfied = disp ? disp.isSatisfied : false;
+      const heldSectionCode = disp?.heldSectionCode || null;
+      const arrowText = heldSectionCode ? `${heldSectionCode} → ` : "— → ";
+
+      return `<tr>
         <td style="font-weight: 600;">${s.courseCode}</td>
-        <td class="k muted">— → <span style="color: var(--ink-2);">${s.sectionCode}</span></td>
-        <td style="text-align: right;"><span class="subj-status st-wait">watching</span></td>
-      </tr>`
-    )
+        <td class="k muted">${arrowText}<span style="color: var(--ink-2);">${s.sectionCode}</span></td>
+        <td style="text-align: right;">
+          <span class="subj-status ${isSatisfied ? 'st-done' : 'st-wait'}">
+            ${isSatisfied ? 'satisfied' : 'watching'}
+          </span>
+        </td>
+      </tr>`;
+    })
     .join("");
+
+  const showStopButton = state === "watching" || state === "armed" || state === "suspended";
+  const stopButtonHtml = showStopButton
+    ? `<div style="margin-top: 16px;">
+        <button type="button" id="stopVigilBtn" class="btn ${isStopConfirming ? 'btn-danger' : 'btn-ghost'} btn-block">
+          ${isStopConfirming ? 'Stop Vigil? Click again to confirm' : 'Stop Vigil'}
+        </button>
+      </div>`
+    : "";
 
   panelRun.innerHTML = `
     <div style="padding: 12px 0 10px;">
@@ -327,7 +370,34 @@ function renderRunPanel() {
     </div>
     <div class="sec-h" style="margin-top: 4px;"><span>Subjects</span></div>
     <table class="b-plan"><tbody>${subjectsHtml}</tbody></table>
+    ${stopButtonHtml}
   `;
+
+  const stopBtn = panelRun.querySelector("#stopVigilBtn");
+  if (stopBtn) {
+    stopBtn.addEventListener("click", async () => {
+      if (!isStopConfirming) {
+        isStopConfirming = true;
+        renderRunPanel();
+        if (stopConfirmTimer) clearTimeout(stopConfirmTimer);
+        stopConfirmTimer = setTimeout(() => {
+          isStopConfirming = false;
+          renderRunPanel();
+        }, 5000);
+      } else {
+        if (stopConfirmTimer) clearTimeout(stopConfirmTimer);
+        isStopConfirming = false;
+        await stopVigil({
+          storageApi: { set: storageSet, get: storageGet },
+          alarmsApi: typeof chrome !== "undefined" ? chrome?.alarms : null,
+          actionApi: typeof chrome !== "undefined" ? chrome?.action : null,
+          notificationsApi: typeof chrome !== "undefined" ? chrome?.notifications : null,
+        });
+        vigilData = { ...(vigilData || {}), state: "stopped" };
+        render();
+      }
+    });
+  }
 }
 
 function renderReportPanel() {
@@ -628,7 +698,7 @@ async function load() {
 
     // Remove legacy keys and load stored plan & vigil & reporting state
     await storageRemove(["enlistedSubjects", "executionLog"]);
-    const storageResult = await storageGet(["plan", "vigil", "ledger", "passTail"]);
+    const storageResult = await storageGet(["plan", "vigil", "ledger", "passTail", "reconciliation"]);
     currentPlan = storageResult.plan || emptyPlan();
     if (!Array.isArray(currentPlan.subjects)) {
       currentPlan = emptyPlan();
@@ -637,6 +707,7 @@ async function load() {
     vigilData = storageResult.vigil || null;
     ledgerData = storageResult.ledger || [];
     passTailData = storageResult.passTail || [];
+    reconciliationData = storageResult.reconciliation || null;
 
     if (currentPlan.startMode) {
       startMode = currentPlan.startMode;
@@ -666,6 +737,20 @@ async function load() {
     console.error("Load failed:", err);
     render();
   }
+}
+
+// Live update listener when storage changes in the background
+if (typeof chrome !== "undefined" && chrome?.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local") {
+      if (changes.plan) currentPlan = changes.plan.newValue || emptyPlan();
+      if (changes.vigil) vigilData = changes.vigil.newValue || null;
+      if (changes.ledger) ledgerData = changes.ledger.newValue || [];
+      if (changes.passTail) passTailData = changes.passTail.newValue || [];
+      if (changes.reconciliation) reconciliationData = changes.reconciliation.newValue || null;
+      render();
+    }
+  });
 }
 
 // Initialize on load

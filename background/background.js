@@ -14,6 +14,10 @@ import {
   handleUnrecognisedAbort,
   handleLoggedOutSuspend,
 } from '../popup/tab-manager.js';
+import {
+  executePass,
+  stopVigil,
+} from '../popup/pass.js';
 
 // Top-level service worker initialization (runs on cold start / wake-up)
 rebuildAlarmsFromStorage({
@@ -51,6 +55,14 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       tabsApi: chrome.tabs,
       storageApi: chrome.storage.local,
       alarmsApi: chrome.alarms,
+    });
+  } else if (alarm.name === 'vigil_pass') {
+    await executePass({
+      tabsApi: chrome.tabs,
+      storageApi: chrome.storage.local,
+      alarmsApi: chrome.alarms,
+      actionApi: chrome.action,
+      notificationsApi: chrome.notifications,
     });
   } else if (alarm.name === 'probe_session') {
     const sessionRes = await checkSession();
@@ -124,6 +136,31 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
         alarmsApi: chrome.alarms,
         notificationsApi: chrome.notifications,
         tabsApi: chrome.tabs,
+      })
+        .then((res) => sendResponse({ success: true, ...res }))
+        .catch((err) => sendResponse({ success: false, error: err.message }));
+      return true;
+    }
+
+    if (msgType === 'RUN_PASS') {
+      executePass({
+        tabsApi: chrome.tabs,
+        storageApi: chrome.storage.local,
+        alarmsApi: chrome.alarms,
+        actionApi: chrome.action,
+        notificationsApi: chrome.notifications,
+      })
+        .then((res) => sendResponse({ success: true, ...res }))
+        .catch((err) => sendResponse({ success: false, error: err.message }));
+      return true;
+    }
+
+    if (msgType === 'STOP_VIGIL') {
+      stopVigil({
+        storageApi: chrome.storage.local,
+        alarmsApi: chrome.alarms,
+        actionApi: chrome.action,
+        notificationsApi: chrome.notifications,
       })
         .then((res) => sendResponse({ success: true, ...res }))
         .catch((err) => sendResponse({ success: false, error: err.message }));

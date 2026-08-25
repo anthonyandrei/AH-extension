@@ -274,6 +274,9 @@ export async function transitionArmedToWatching({
     await alarmsApi.clear('vigil_start');
     await alarmsApi.clear('vigil_keepalive');
   }
+  if (alarmsApi?.create) {
+    alarmsApi.create('vigil_pass', { delayInMinutes: 0.01 });
+  }
 
   const unresolvedCount = Array.isArray(plan?.subjects) ? plan.subjects.length : 0;
   updateBadge({
@@ -417,6 +420,9 @@ export async function armVigil({
       await alarmsApi.clear('vigil_start');
       await alarmsApi.clear('vigil_keepalive');
     }
+    if (alarmsApi?.create) {
+      alarmsApi.create('vigil_pass', { delayInMinutes: 0.01 });
+    }
 
     updateBadge({
       state: 'watching',
@@ -539,6 +545,7 @@ export async function rebuildAlarmsFromStorage({
       await alarmsApi.clear('vigil_start');
       await alarmsApi.clear('vigil_keepalive');
       await alarmsApi.clear('owned_tab_reload');
+      await alarmsApi.clear('vigil_pass');
     }
     updateBadge({ state: vigil?.state || 'none', actionApi });
     return { state: vigil?.state || 'none' };
@@ -594,6 +601,10 @@ export async function rebuildAlarmsFromStorage({
       const existingReload = await alarmsApi.get('owned_tab_reload');
       if (!existingReload) {
         alarmsApi.create('owned_tab_reload', { delayInMinutes: 3 });
+      }
+      const existingPass = await alarmsApi.get('vigil_pass');
+      if (!existingPass) {
+        alarmsApi.create('vigil_pass', { delayInMinutes: 0.01 });
       }
     }
 

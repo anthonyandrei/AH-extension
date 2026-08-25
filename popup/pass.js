@@ -1,0 +1,673 @@
+/**
+/**
+ * Pass loop engine, cadence backoff calculator, 6-disposition reconciliation,
+ * rolling pass tail buffer, and Stop semantics for ArchersHub Enlistment Automator.
+ * Implements docs/SPEC.md §7, §8, §10, §11, ADR-0003, ADR-0004, ADR-0005, ADR-0006, ADR-0007.
+ */
+
+import { PAGE_STATES } from '../content/classifier.js';
+import { readCatalogue } from './catalogue.js';
+import { updateBadge } from './arming.js';
+import { appendLedgerEntry } from './reporting.js';
+import { steerOwnedTab } from './tab-manager.js';
+
+export const DISPOSITIONS = Object.freeze({
+  ACQUIRE: 'acquire',
+  NONE_ABSENT: 'none_absent',
+  SATISFIED: 'satisfied',
+  UPGRADE: 'upgrade',
+  HELD_DIFF_ABSENT: 'keep_backup',
+  PRESERVE: 'preserve',
+});
+
+function idEquals(a, b) {
+  return a === b || String(a) === String(b);
+}
+
+/**
+ * Computes base cadence interval in ms derived purely from stored lastChangeAt.
+ * Formula: n = log(1 + elapsed/4) / log(1.5), interval = min(60s, 2s * 1.5^n).
+ *
+ * @param {{
+ *   lastChangeAt?: number,
+ *   now?: number,
+ *   rateLimited?: boolean
+ * }} params
+ * @returns {number} Interval in milliseconds
+ */
+export function computeCadenceInterval({ lastChangeAt, now = Date.now(), rateLimited = false }) {
+  if (rateLimited) {
+    return 60000;
+  }
+
+  const lastChange = typeof lastChangeAt === 'number' ? lastChangeAt : now;
+  const elapsedSec = Math.max(0, (now - lastChange) / 1000);
+
+  // n = log(1 + elapsed/4) / log(1.5)
+  const n = Math.log(1 + elapsedSec / 4) / Math.log(1.5);
+  // interval = min(60s, 2s * 1.5^n)
+  const intervalSec = Math.min(60, 2 * Math.pow(1.5, n));
+
+  return Math.round(intervalSec * 1000);
+}
+
+/**
+ * Applies +/-25% jitter to an interval in milliseconds.
+ *
+ * @param {number} intervalMs
+ * @param {() => number} [randomFn=Math.random]
+ * @returns {number} Jittered interval in milliseconds
+ */
+export function applyJitter(intervalMs, randomFn = Math.random) {
+  const factor = 0.75 + randomFn() * 0.5;
+  return Math.round(intervalMs * factor);
+}
+
+/**
+ * Computes the total jittered delay until the next pass.
+ *
+ * @param {{
+ *   lastChangeAt?: number,
+ *   now?: number,
+ *   rateLimited?: boolean,
+ *   randomFn?: () => number
+ * }} params
+ * @returns {number} Delay in milliseconds
+ */
+export function computeNextPassDelay({
+  lastChangeAt,
+  now = Date.now(),
+  rateLimited = false,
+  randomFn = Math.random,
+}) {
+  const baseInterval = computeCadenceInterval({ lastChangeAt, now, rateLimited });
+  return applyJitter(baseInterval, randomFn);
+}
+
+/**
+ * Detects if any of the three reset conditions occurred for requested subjects:
+ * 1. A Saved Slot appeared (previously unheld is now held).
+ * 2. A Section appeared in dropdown options.
+ * 3. A Section disappeared from dropdown options.
+ *
+ * @param {{
+ *   previousHeldSnapshot?: Record<string|number, number|null>,
+ *   currentHeldSnapshot?: Record<string|number, number|null>,
+ *   previousSectionsSnapshot?: Record<string|number, Array<number>>,
+ *   currentSectionsSnapshot?: Record<string|number, Array<number>>,
+ *   requestedCourseIds?: Array<string|number>
+ * }} params
+ * @returns {{ reset: boolean, reason?: string }}
+ */
+export function detectResetConditions({
+  previousHeldSnapshot = {},
+  currentHeldSnapshot = {},
+  previousSectionsSnapshot = {},
+  currentSectionsSnapshot = {},
+  requestedCourseIds = [],
+}) {
+  const courseIds = requestedCourseIds.map(String);
+
+  for (const cid of courseIds) {
+    const prevHeld = previousHeldSnapshot[cid];
+    const currHeld = currentHeldSnapshot[cid];
+
+    // Condition 1: Saved slot appeared
+    if ((prevHeld === null || prevHeld === undefined) && currHeld !== null && currHeld !== undefined) {
+      return { reset: true, reason: 'saved_slot_appeared' };
+    }
+
+    // Condition 2 & 3: Section appeared or disappeared from dropdown options
+    const prevSecs = new Set(previousSectionsSnapshot[cid] || []);
+    const currSecs = new Set(currentSectionsSnapshot[cid] || []);
+
+    if (previousSectionsSnapshot[cid] && currentSectionsSnapshot[cid]) {
+      for (const sId of currSecs) {
+        if (!prevSecs.has(sId)) {
+          return { reset: true, reason: 'section_appeared' };
+        }
+      }
+      for (const sId of prevSecs) {
+        if (!currSecs.has(sId)) {
+          return { reset: true, reason: 'section_disappeared' };
+        }
+      }
+    }
+  }
+
+  return { reset: false };
+}
+
+/**
+ * Reconciles one plan subject against the live catalogue read per §8 table.
+ *
+ * @param {{
+ *   planSubject: { courseCreationId: string|number, courseCode: string, sectionCreationId: string|number, sectionCode: string },
+ *   course?: object
+ * }} params
+ * @returns {object}
+ */
+export function reconcileSubject({ planSubject, course }) {
+  if (!course) {
+    return {
+      courseCreationId: planSubject.courseCreationId,
+      courseCode: planSubject.courseCode,
+      wantedSectionCreationId: planSubject.sectionCreationId,
+      wantedSectionCode: planSubject.sectionCode,
+      heldSectionCreationId: null,
+      disposition: DISPOSITIONS.NONE_ABSENT,
+      status: 'watching',
+      isSatisfied: false,
+      isWantedPresent: false,
+    };
+  }
+
+  const heldId = course.heldSectionCreationId !== undefined ? course.heldSectionCreationId : null;
+  const wantedId = planSubject.sectionCreationId;
+  const sections = Array.isArray(course.sections) ? course.sections : [];
+  const wantedFound = sections.find((s) => idEquals(s.sectionCreationId, wantedId));
+  const isWantedPresent = Boolean(wantedFound);
+
+  // 1. None held
+  if (heldId === null) {
+    if (isWantedPresent) {
+      return {
+        courseCreationId: planSubject.courseCreationId,
+        courseCode: planSubject.courseCode,
+        wantedSectionCreationId: wantedId,
+        wantedSectionCode: planSubject.sectionCode,
+        heldSectionCreationId: null,
+        disposition: DISPOSITIONS.ACQUIRE,
+        status: 'watching',
+        isSatisfied: false,
+        isWantedPresent: true,
+      };
+    }
+    return {
+      courseCreationId: planSubject.courseCreationId,
+      courseCode: planSubject.courseCode,
+      wantedSectionCreationId: wantedId,
+      wantedSectionCode: planSubject.sectionCode,
+      heldSectionCreationId: null,
+      disposition: DISPOSITIONS.NONE_ABSENT,
+      status: 'watching',
+      isSatisfied: false,
+      isWantedPresent: false,
+    };
+  }
+
+  // 2. Held = Wanted
+  if (idEquals(heldId, wantedId)) {
+    return {
+      courseCreationId: planSubject.courseCreationId,
+      courseCode: planSubject.courseCode,
+      wantedSectionCreationId: wantedId,
+      wantedSectionCode: planSubject.sectionCode,
+      heldSectionCreationId: heldId,
+      disposition: DISPOSITIONS.SATISFIED,
+      status: 'satisfied',
+      isSatisfied: true,
+      isWantedPresent,
+    };
+  }
+
+  // 3. Held != Wanted
+  if (isWantedPresent) {
+    return {
+      courseCreationId: planSubject.courseCreationId,
+      courseCode: planSubject.courseCode,
+      wantedSectionCreationId: wantedId,
+      wantedSectionCode: planSubject.sectionCode,
+      heldSectionCreationId: heldId,
+      disposition: DISPOSITIONS.UPGRADE,
+      status: 'watching',
+      isSatisfied: false,
+      isWantedPresent: true,
+    };
+  }
+
+  return {
+    courseCreationId: planSubject.courseCreationId,
+    courseCode: planSubject.courseCode,
+    wantedSectionCreationId: wantedId,
+    wantedSectionCode: planSubject.sectionCode,
+    heldSectionCreationId: heldId,
+    disposition: DISPOSITIONS.HELD_DIFF_ABSENT,
+    status: 'watching',
+    isSatisfied: false,
+    isWantedPresent: false,
+  };
+}
+
+/**
+ * Reconciles the full plan and identifies unrequested held courses to preserve.
+ *
+ * @param {{
+ *   plan: { subjects?: Array<object> },
+ *   courses?: Array<object>
+ * }} params
+ * @returns {{
+ *   dispositions: Array<object>,
+ *   unresolvedCount: number,
+ *   allSatisfied: boolean,
+ *   hasActionableDispositions: boolean
+ * }}
+ */
+export function reconcilePlan({ plan, courses = [] }) {
+  const planSubjects = Array.isArray(plan?.subjects) ? plan.subjects : [];
+  const requestedCourseIds = new Set(planSubjects.map((s) => String(s.courseCreationId)));
+  const dispositions = [];
+  let unresolvedCount = 0;
+
+  // Reconcile requested subjects
+  for (const planSubject of planSubjects) {
+    const course = courses.find((c) => idEquals(c.courseCreationId, planSubject.courseCreationId));
+    const subResult = reconcileSubject({ planSubject, course });
+    dispositions.push(subResult);
+    if (!subResult.isSatisfied) {
+      unresolvedCount++;
+    }
+  }
+
+  // Preserve held unrequested subjects
+  for (const course of courses) {
+    if (
+      !requestedCourseIds.has(String(course.courseCreationId)) &&
+      (course.heldSectionCreationId !== null && course.heldSectionCreationId !== undefined || course.isRegistered === 1)
+    ) {
+      dispositions.push({
+        courseCreationId: course.courseCreationId,
+        courseCode: course.courseCode,
+        wantedSectionCreationId: null,
+        wantedSectionCode: null,
+        heldSectionCreationId: course.heldSectionCreationId,
+        disposition: DISPOSITIONS.PRESERVE,
+        status: 'preserve',
+        isSatisfied: true,
+        isWantedPresent: false,
+      });
+    }
+  }
+
+  const allSatisfied = planSubjects.length > 0 && unresolvedCount === 0;
+  const hasActionableDispositions = dispositions.some(
+    (d) => d.disposition === DISPOSITIONS.ACQUIRE || d.disposition === DISPOSITIONS.UPGRADE
+  );
+
+  return {
+    dispositions,
+    unresolvedCount,
+    allSatisfied,
+    hasActionableDispositions,
+  };
+}
+
+/**
+ * Appends a pass record to the rolling pass tail in storage (capped at 200 rows).
+ *
+ * @param {{
+ *   passRecord: object,
+ *   storageApi?: object,
+ *   maxTail?: number
+ * }} params
+ * @returns {Promise<Array<object>>} Updated pass tail array
+ */
+export async function appendPassTail({ passRecord, storageApi, maxTail = 200 }) {
+  const currentData = storageApi?.get ? await storageApi.get(['passTail']) : {};
+  const currentTail = Array.isArray(currentData?.passTail) ? currentData.passTail : [];
+
+  let updatedTail = [...currentTail, passRecord];
+  if (updatedTail.length > maxTail) {
+    updatedTail = updatedTail.slice(-maxTail);
+  }
+
+  if (storageApi?.set) {
+    await storageApi.set({ passTail: updatedTail });
+  }
+
+  return updatedTail;
+}
+
+/**
+ * Stops the Vigil: sets state to Stopped, empties badge, clears alarms, and leaves plan intact.
+ *
+ * @param {{
+ *   storageApi?: object,
+ *   alarmsApi?: object,
+ *   actionApi?: object,
+ *   notificationsApi?: object,
+ *   now?: number
+ * }} params
+ * @returns {Promise<{ state: string, vigil: object }>}
+ */
+export async function stopVigil({
+  storageApi,
+  alarmsApi,
+  actionApi,
+  notificationsApi,
+  now = Date.now(),
+}) {
+  const currentData = storageApi?.get ? await storageApi.get(['vigil']) : {};
+  const vigil = currentData?.vigil || {};
+
+  const updatedVigil = {
+    ...vigil,
+    state: 'stopped',
+    nextFireTime: null,
+    lastChangeAt: now,
+  };
+
+  if (storageApi?.set) {
+    await storageApi.set({ vigil: updatedVigil });
+  }
+
+  if (alarmsApi?.clear) {
+    await alarmsApi.clear('vigil_pass');
+    await alarmsApi.clear('vigil_start');
+    await alarmsApi.clear('vigil_keepalive');
+    await alarmsApi.clear('owned_tab_reload');
+    await alarmsApi.clear('probe_session');
+    await alarmsApi.clear('alert_repeat');
+  }
+
+  updateBadge({ state: 'stopped', actionApi });
+
+  await appendLedgerEntry({
+    entry: {
+      tier: 'ambient',
+      type: 'stopped',
+      title: 'Vigil stopped',
+      cause: 'Stopped by student',
+      timestamp: now,
+    },
+    storageApi,
+    notificationsApi,
+    alarmsApi,
+    now,
+  });
+
+  return { state: 'stopped', vigil: updatedVigil };
+}
+
+/**
+ * Executes a single Pass per SPEC §7, runs reconciliation on Step2Bound, updates storage & badge,
+ * appends to passTail, and schedules the next pass tick.
+ *
+ * @param {{
+ *   tabsApi?: object,
+ *   storageApi?: object,
+ *   alarmsApi?: object,
+ *   actionApi?: object,
+ *   notificationsApi?: object,
+ *   fetchImpl?: typeof fetch,
+ *   baseUrl?: string,
+ *   now?: number
+ * }} params
+ * @returns {Promise<object>} Pass result summary
+ */
+export async function executePass({
+  tabsApi = typeof chrome !== 'undefined' ? chrome?.tabs : null,
+  storageApi = typeof chrome !== 'undefined' ? chrome?.storage?.local : null,
+  alarmsApi = typeof chrome !== 'undefined' ? chrome?.alarms : null,
+  actionApi = typeof chrome !== 'undefined' ? chrome?.action : null,
+  notificationsApi = typeof chrome !== 'undefined' ? chrome?.notifications : null,
+  fetchImpl = fetch,
+  baseUrl = 'https://archershub.dlsu.edu.ph',
+  now = Date.now(),
+} = {}) {
+  const data = storageApi?.get
+    ? await storageApi.get(['vigil', 'plan', 'ownedTabId', 'lastSectionsSnapshot', 'lastHeldSnapshot'])
+    : {};
+  const vigil = data?.vigil;
+  const plan = data?.plan;
+  const ownedTabId = data?.ownedTabId;
+
+  if (!vigil || vigil.state !== 'watching') {
+    return { isComplete: false, reason: 'not_watching' };
+  }
+
+  // 1. Classify Page State via Owned Tab
+  let pageState = PAGE_STATES.NO_TAB;
+  let tabResponse = null;
+
+  if (tabsApi && ownedTabId) {
+    try {
+      tabResponse = await tabsApi.sendMessage(ownedTabId, { type: 'CLASSIFY_PAGE' });
+      pageState = tabResponse?.state || PAGE_STATES.STEP2_BOUND;
+    } catch (_) {
+      pageState = PAGE_STATES.NOT_INJECTED;
+    }
+  }
+
+  // 2. If state is not Step2Bound, steer tab, record incomplete pass, and end pass here
+  if (pageState !== PAGE_STATES.STEP2_BOUND) {
+    if (tabsApi && ownedTabId) {
+      await steerOwnedTab({
+        tabId: ownedTabId,
+        tabsApi,
+        storageApi,
+        actionApi,
+        alarmsApi,
+        notificationsApi,
+        baseUrl,
+        now,
+      });
+    }
+
+    const nextDelay = computeNextPassDelay({
+      lastChangeAt: vigil.lastChangeAt,
+      now,
+      rateLimited: vigil.rateLimited,
+    });
+
+    const passRecord = {
+      id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: now,
+      state: pageState,
+      complete: false,
+      interval: nextDelay,
+      summary: `Page state ${pageState} — non-complete pass`,
+    };
+
+    await appendPassTail({ passRecord, storageApi });
+
+    if (alarmsApi?.create) {
+      alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
+    }
+
+    return { isComplete: false, state: pageState };
+  }
+
+  // 3. Step2Bound reached: Read catalogue over HTTP scoped to requested subjects
+  let catalogue = null;
+  try {
+    catalogue = await readCatalogue(fetchImpl, baseUrl);
+  } catch (err) {
+    catalogue = { loggedIn: false, error: err?.message };
+  }
+
+  // Handle HTTP error responses
+  if (!catalogue || catalogue.loggedIn === false) {
+    const errorStatus = catalogue?.status || (catalogue?.error === '429' ? 429 : catalogue?.error === '403' ? 403 : 500);
+
+    const updatedVigil = { ...vigil };
+    if (errorStatus === 429 || errorStatus === 403) {
+      updatedVigil.rateLimited = true;
+    }
+
+    const nextDelay = computeNextPassDelay({
+      lastChangeAt: updatedVigil.lastChangeAt,
+      now,
+      rateLimited: updatedVigil.rateLimited,
+    });
+
+    updatedVigil.nextFireTime = now + nextDelay;
+
+    if (storageApi?.set) {
+      await storageApi.set({ vigil: updatedVigil });
+    }
+
+    const passRecord = {
+      id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: now,
+      state: PAGE_STATES.STEP2_BOUND,
+      complete: false,
+      error: errorStatus,
+      interval: nextDelay,
+      summary: `HTTP Error ${errorStatus} — treated as ${errorStatus === 500 ? 'no-change' : 'rate-limited'}`,
+    };
+
+    await appendPassTail({ passRecord, storageApi });
+
+    if (alarmsApi?.create) {
+      alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
+    }
+
+    return { isComplete: false, error: errorStatus };
+  }
+
+  // 4. Run Reconciliation against successful read
+  const courses = Array.isArray(catalogue.courses) ? catalogue.courses : [];
+  const reconciliation = reconcilePlan({ plan, courses });
+
+  // 5. Detect Reset Conditions
+  const requestedCourseIds = Array.isArray(plan?.subjects)
+    ? plan.subjects.map((s) => s.courseCreationId)
+    : [];
+
+  const currentHeldSnapshot = {};
+  const currentSectionsSnapshot = {};
+  for (const c of courses) {
+    currentHeldSnapshot[c.courseCreationId] = c.heldSectionCreationId ?? null;
+    currentSectionsSnapshot[c.courseCreationId] = Array.isArray(c.sections)
+      ? c.sections.map((s) => s.sectionCreationId)
+      : [];
+  }
+
+  const resetResult = detectResetConditions({
+    previousHeldSnapshot: data?.lastHeldSnapshot || vigil?.previousHeldSnapshot,
+    currentHeldSnapshot,
+    previousSectionsSnapshot: data?.lastSectionsSnapshot || vigil?.previousSectionsSnapshot,
+    currentSectionsSnapshot,
+    requestedCourseIds,
+  });
+
+  const updatedVigil = {
+    ...vigil,
+    previousHeldSnapshot: currentHeldSnapshot,
+    previousSectionsSnapshot: currentSectionsSnapshot,
+  };
+
+  if (resetResult.reset && !updatedVigil.rateLimited) {
+    updatedVigil.lastChangeAt = now;
+  }
+
+  // 6. Check if Vigil is Complete
+  if (reconciliation.allSatisfied) {
+    updatedVigil.state = 'complete';
+    updatedVigil.nextFireTime = null;
+    updatedVigil.lastChangeAt = now;
+
+    if (storageApi?.set) {
+      await storageApi.set({
+        vigil: updatedVigil,
+        lastCompletePassAt: now,
+        reconciliation,
+        lastHeldSnapshot: currentHeldSnapshot,
+        lastSectionsSnapshot: currentSectionsSnapshot,
+      });
+    }
+
+    if (alarmsApi?.clear) {
+      await alarmsApi.clear('vigil_pass');
+    }
+
+    updateBadge({ state: 'complete', actionApi });
+
+    await appendLedgerEntry({
+      entry: {
+        tier: 'notice',
+        type: 'complete',
+        title: 'Vigil complete',
+        cause: 'Every subject holds its Wanted Section',
+        timestamp: now,
+      },
+      storageApi,
+      notificationsApi,
+      alarmsApi,
+      now,
+    });
+
+    const passRecord = {
+      id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: now,
+      state: PAGE_STATES.STEP2_BOUND,
+      complete: true,
+      unresolvedCount: 0,
+      allSatisfied: true,
+      dispositions: reconciliation.dispositions,
+      summary: 'Complete — all subjects satisfied',
+    };
+
+    await appendPassTail({ passRecord, storageApi });
+
+    return {
+      isComplete: true,
+      state: 'complete',
+      unresolvedCount: 0,
+      allSatisfied: true,
+      reconciliation,
+    };
+  }
+
+  // 7. Still Watching: Update badge, record pass, schedule next tick
+  const nextDelay = computeNextPassDelay({
+    lastChangeAt: updatedVigil.lastChangeAt,
+    now,
+    rateLimited: updatedVigil.rateLimited,
+  });
+
+  updatedVigil.nextFireTime = now + nextDelay;
+
+  if (storageApi?.set) {
+    await storageApi.set({
+      vigil: updatedVigil,
+      lastCompletePassAt: now,
+      reconciliation,
+      lastHeldSnapshot: currentHeldSnapshot,
+      lastSectionsSnapshot: currentSectionsSnapshot,
+    });
+  }
+
+  updateBadge({
+    state: 'watching',
+    unresolvedCount: reconciliation.unresolvedCount,
+    actionApi,
+  });
+
+  const passRecord = {
+    id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+    timestamp: now,
+    state: PAGE_STATES.STEP2_BOUND,
+    complete: true,
+    interval: nextDelay,
+    unresolvedCount: reconciliation.unresolvedCount,
+    allSatisfied: false,
+    dispositions: reconciliation.dispositions,
+    summary: `Step2Bound: ${reconciliation.unresolvedCount} watching`,
+  };
+
+  await appendPassTail({ passRecord, storageApi });
+
+  if (alarmsApi?.create) {
+    alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
+  }
+
+  return {
+    isComplete: true,
+    state: 'watching',
+    unresolvedCount: reconciliation.unresolvedCount,
+    allSatisfied: false,
+    reconciliation,
+  };
+}

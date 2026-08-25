@@ -183,6 +183,10 @@ export async function readCatalogue(fetchImpl = fetch, baseUrl = ARCHERSHUB_BASE
     credentials: 'include'
   });
 
+  if (!shellResponse || !shellResponse.ok) {
+    return { loggedIn: false, status: shellResponse?.status || 500 };
+  }
+
   const html = await shellResponse.text();
   const shellParams = extractShellParams(html);
 
@@ -205,6 +209,10 @@ export async function readCatalogue(fetchImpl = fetch, baseUrl = ARCHERSHUB_BASE
     body: allCourseParams.toString()
   });
 
+  if (!allCourseResponse || !allCourseResponse.ok) {
+    return { loggedIn: false, status: allCourseResponse?.status || 500 };
+  }
+
   const allCourseData = await allCourseResponse.json();
   const courseList = buildCourseList(allCourseData);
 
@@ -218,6 +226,10 @@ export async function readCatalogue(fetchImpl = fetch, baseUrl = ARCHERSHUB_BASE
     },
     body: sectionBody
   });
+
+  if (!sectionResponse || !sectionResponse.ok) {
+    return { loggedIn: false, status: sectionResponse?.status || 500 };
+  }
 
   const sectionData = await sectionResponse.json();
 
