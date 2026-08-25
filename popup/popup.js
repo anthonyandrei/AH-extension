@@ -29,7 +29,7 @@ const addBtn = document.getElementById("addBtn");
 const planRefusal = document.getElementById("planRefusal");
 
 const startNowBtn = document.getElementById("startNowBtn");
-const startScheduledBtn = document.getElementById("startScheduledBtn");
+const startAtTimeBtn = document.getElementById("startAtTimeBtn");
 const startTimeInput = document.getElementById("startTimeInput");
 const startNowDescription = document.getElementById("startNowDescription");
 const armBtn = document.getElementById("armBtn");
@@ -218,7 +218,7 @@ function renderRefusal() {
     note.appendChild(title);
 
     const desc = document.createElement("div");
-    desc.textContent = "Arming checks the session first, so a Vigil is never scheduled against a login it does not have.";
+    desc.textContent = "Arming checks the session first, so a Vigil is never armed against a login it does not have.";
     note.appendChild(desc);
 
     const btnWrap = document.createElement("div");
@@ -245,7 +245,7 @@ function renderRefusal() {
 function renderStartControl() {
   const isNow = startMode === "now";
   if (startNowBtn) startNowBtn.setAttribute("aria-pressed", String(isNow));
-  if (startScheduledBtn) startScheduledBtn.setAttribute("aria-pressed", String(!isNow));
+  if (startAtTimeBtn) startAtTimeBtn.setAttribute("aria-pressed", String(!isNow));
 
   if (startTimeInput) {
     startTimeInput.style.display = isNow ? "none" : "block";
@@ -329,7 +329,7 @@ function renderRunPanel() {
 
   if (state === "armed") {
     title = `Armed for ${formatDateTimeDisplay(vigilData.nextFireTime)}`;
-    subtitle = "Scheduled. Pre-start keepalive active.";
+    subtitle = "Armed. Pre-start keepalive active.";
   } else if (state === "watching") {
     if (reconciliationData) {
       const satisfiedCount = (reconciliationData.dispositions || []).filter(
@@ -584,8 +584,8 @@ if (startNowBtn) {
   });
 }
 
-if (startScheduledBtn) {
-  startScheduledBtn.addEventListener("click", () => {
+if (startAtTimeBtn) {
+  startAtTimeBtn.addEventListener("click", () => {
     startMode = "at-time";
     currentPlan.startMode = "at-time";
     renderStartControl();

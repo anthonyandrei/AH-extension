@@ -132,7 +132,7 @@ export function formatArmLabel({
     return 'Start watching now';
   }
   const formatted = startTime ? formatDateTimeDisplay(startTime) : '';
-  return formatted ? `Arm for ${formatted}` : 'Arm for scheduled time';
+  return formatted ? `Arm for ${formatted}` : 'Arm for start time';
 }
 
 /**
@@ -495,7 +495,7 @@ export async function armVigil({
       tier: 'ambient',
       type: 'armed',
       title: 'Vigil armed',
-      cause: `Scheduled for ${formatDateTimeDisplay(startTime || nextFireTime)}`,
+      cause: `Armed for ${formatDateTimeDisplay(startTime || nextFireTime)}`,
     },
     storageApi,
     notificationsApi,

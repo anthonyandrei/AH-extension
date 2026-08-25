@@ -145,7 +145,7 @@ describe('reporting module', () => {
           tier: 'ambient',
           type: 'armed',
           title: 'Vigil armed',
-          cause: 'Scheduled for Wed 26 Aug, 07:00',
+          cause: 'Armed for Wed 26 Aug, 07:00',
         },
         storageApi: storage,
         notificationsApi: notifications,

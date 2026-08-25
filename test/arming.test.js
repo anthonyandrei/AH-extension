@@ -210,6 +210,17 @@ describe('arming module', () => {
         subjectCount: 2,
       });
       assert.match(label, /^Arm for /);
+      assert.doesNotMatch(label, /scheduled/i);
+    });
+
+    it('returns "Arm for start time" when startMode is at-time without startTime', () => {
+      const label = formatArmLabel({
+        startMode: 'at-time',
+        startTime: null,
+        subjectCount: 2,
+      });
+      assert.equal(label, 'Arm for start time');
+      assert.doesNotMatch(label, /scheduled/i);
     });
   });
 
@@ -392,7 +403,7 @@ describe('arming module', () => {
       const savedPlan = storage._getStore().plan;
       assert.equal(savedPlan.startMode, 'now');
 
-      // No scheduled start alarm
+      // No start alarm
       assert.equal(alarms._getAlarms().has('vigil_start'), false);
 
       // Badge updated to watching (1 subject)
@@ -405,7 +416,7 @@ describe('arming module', () => {
       assert.equal(ledger[0].title, 'Vigil started');
     });
 
-    it('choosing "At a set time" in the future writes Vigil record as Armed and schedules one-shot alarm + keepalive alarm', async () => {
+    it('choosing "At a set time" in the future writes Vigil record as Armed and creates one-shot start alarm + keepalive alarm', async () => {
       const storage = createMockStorage();
       const alarms = createMockAlarms();
       const action = createMockAction();
@@ -435,7 +446,7 @@ describe('arming module', () => {
       assert.equal(savedPlan.startMode, 'at-time');
       assert.equal(savedPlan.startTime, startTime);
 
-      // Alarms scheduled
+      // Alarms created
       const startAlarm = alarms._getAlarms().get('vigil_start');
       assert.ok(startAlarm);
       assert.equal(startAlarm.when, startTimeMs);
@@ -452,6 +463,8 @@ describe('arming module', () => {
       assert.ok(Array.isArray(ledger) && ledger.length === 1);
       assert.equal(ledger[0].tier, 'ambient');
       assert.equal(ledger[0].title, 'Vigil armed');
+      assert.match(ledger[0].cause, /^Armed for /);
+      assert.doesNotMatch(ledger[0].cause, /scheduled/i);
     });
 
     it('choosing "At a set time" with a past timestamp starts watching immediately', async () => {

@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 import {
   PAGE_STATES,
@@ -777,7 +778,7 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
       assert.equal(alarms._getAlarms().size, 0);
 
       // 2. Start At Time mode
-      const resScheduled = await armVigil({
+      const resAtTime = await armVigil({
         plan,
         startMode: 'at-time',
         startTime: '2026-08-26T07:00:00Z',
@@ -788,8 +789,8 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
         tabsApi: tabs,
       });
 
-      assert.equal(resScheduled.success, false);
-      assert.equal(resScheduled.reason, 'logged_out');
+      assert.equal(resAtTime.success, false);
+      assert.equal(resAtTime.reason, 'logged_out');
       assert.equal(storage._getStore().vigil, undefined);
       assert.equal(alarms._getAlarms().size, 0);
 
@@ -801,7 +802,7 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
   });
 
   describe('Check 7: Start time that passed while Brave was closed starts Vigil immediately on startup', () => {
-    it('starts Watching immediately on startup when scheduled start time has passed, rather than silently dropping', async () => {
+    it('starts Watching immediately on startup when armed start time has passed, rather than silently dropping', async () => {
       const pastTime = 1756180000000;
       const now = 1756180010000; // 10 seconds after start time
 
@@ -1167,6 +1168,65 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
 
       assert.equal(plan.subjects[0].sectionCreationId, 's_zero');
       assert.equal(plan.subjects[0].sectionCode, 'S12');
+    });
+  });
+
+  describe('Issue #25 Acceptance: Replace banned "scheduled" terminology with Armed in popup UI and ledger', () => {
+    it('does not use inflections of "schedule" to describe an Armed Vigil in popup HTML or JS', () => {
+      const popupHtml = fs.readFileSync(new URL('../popup/popup.html', import.meta.url), 'utf8');
+      const popupJs = fs.readFileSync(new URL('../popup/popup.js', import.meta.url), 'utf8');
+      const armingJs = fs.readFileSync(new URL('../popup/arming.js', import.meta.url), 'utf8');
+
+      // 1. startScheduledBtn identifier replaced with startAtTimeBtn
+      assert.equal(popupHtml.includes('id="startScheduledBtn"'), false);
+      assert.equal(popupHtml.includes('id="startAtTimeBtn"'), true);
+      assert.equal(popupJs.includes('startScheduledBtn'), false);
+      assert.equal(popupJs.includes('startAtTimeBtn'), true);
+
+      // 2. Refusal note uses armed instead of scheduled
+      assert.equal(popupJs.includes('so a Vigil is never scheduled against a login it does not have'), false);
+      assert.equal(popupJs.includes('so a Vigil is never armed against a login it does not have'), true);
+
+      // 3. Armed state subtitle uses Armed instead of Scheduled
+      assert.equal(popupJs.includes('subtitle = "Scheduled. Pre-start keepalive active."'), false);
+      assert.equal(popupJs.includes('subtitle = "Armed. Pre-start keepalive active."'), true);
+
+      // 4. arming.js does not use "Arm for scheduled time" or "Scheduled for"
+      assert.equal(armingJs.includes('Arm for scheduled time'), false);
+      assert.equal(armingJs.includes('Scheduled for ${'), false);
+      assert.equal(armingJs.includes('Armed for ${'), true);
+    });
+
+    it('formatArmLabel and armVigil output Armed-based strings and causes', async () => {
+      // Fallback label
+      const fallbackLabel = formatArmLabel({ startMode: 'at-time', startTime: null, subjectCount: 1 });
+      assert.equal(fallbackLabel, 'Arm for start time');
+      assert.doesNotMatch(fallbackLabel, /scheduled/i);
+
+      // Armed ledger entry cause
+      const storage = createMockStorage();
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const now = 1756180000000;
+      const startTime = '2026-08-26T07:00:00.000Z';
+
+      const result = await armVigil({
+        plan: { subjects: [{ courseCreationId: 1, sectionCreationId: 1, courseCode: 'CC', sectionCode: 'SS' }], startMode: 'at-time', startTime },
+        startMode: 'at-time',
+        startTime,
+        catalogue: { loggedIn: true },
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        now,
+      });
+
+      assert.equal(result.success, true);
+      const ledger = storage._getStore().ledger;
+      assert.ok(ledger && ledger.length > 0);
+      assert.equal(ledger[0].title, 'Vigil armed');
+      assert.match(ledger[0].cause, /^Armed for /);
+      assert.doesNotMatch(ledger[0].cause, /scheduled/i);
     });
   });
 });
