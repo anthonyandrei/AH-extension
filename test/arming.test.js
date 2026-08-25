@@ -79,6 +79,29 @@ function createMockAction() {
   };
 }
 
+// Mock notifications factory
+function createMockNotifications() {
+  const notifications = [];
+  let idCounter = 0;
+  return {
+    create: (idOrOptions, maybeOptions, maybeCallback) => {
+      let id = typeof idOrOptions === 'string' ? idOrOptions : `notif_${++idCounter}`;
+      let options = typeof idOrOptions === 'string' ? maybeOptions : idOrOptions;
+      let callback = typeof maybeOptions === 'function' ? maybeOptions : maybeCallback;
+      const notif = { id, options };
+      notifications.push(notif);
+      if (callback) callback(id);
+      return id;
+    },
+    clear: (id, callback) => {
+      const idx = notifications.findIndex((n) => n.id === id);
+      if (idx !== -1) notifications.splice(idx, 1);
+      if (callback) callback(true);
+    },
+    _getNotifications: () => [...notifications],
+  };
+}
+
 // Mock chrome.tabs factory
 function createMockTabs(initialTabs = []) {
   const tabs = new Map(initialTabs.map((t) => [t.id, { ...t }]));
@@ -656,6 +679,55 @@ describe('arming module', () => {
       assert.equal(action._getBadge().text, '!!');
       assert.equal(action._getBadge().color, '#EF4444');
       assert.ok(alarms._getAlarms().has('alert_repeat'));
+    });
+
+    it('logs Ambient resume entry and restores alarms & badge when vigil.state is watching on startup', async () => {
+      const now = 1756180000000;
+      const storage = createMockStorage({
+        vigil: {
+          state: 'watching',
+          lastChangeAt: now - 30000,
+          nextFireTime: now + 5000,
+          startedAt: now - 60000,
+        },
+        plan: {
+          subjects: [
+            { courseCreationId: 'c1', courseCode: 'MATH101', sectionCreationId: 's1', sectionCode: 'M1' },
+            { courseCreationId: 'c2', courseCode: 'CS102', sectionCreationId: 's2', sectionCode: 'C1' },
+          ],
+        },
+        ledger: [],
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+
+      const result = await rebuildAlarmsFromStorage({
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        now,
+      });
+
+      assert.equal(result.state, 'watching');
+      assert.equal(action._getBadge().text, '2');
+      assert.equal(action._getBadge().color, '#4285F4');
+      assert.ok(alarms._getAlarms().has('vigil_pass'));
+      assert.ok(alarms._getAlarms().has('owned_tab_reload'));
+
+      // Ambient resume entry logged to Run Report ledger
+      const store = storage._getStore();
+      const ledger = store.ledger || [];
+      const resumeEntry = ledger.find((e) => e.type === 'resumed');
+      assert.ok(resumeEntry, 'Resumed entry must exist in ledger');
+      assert.equal(resumeEntry.tier, 'ambient');
+      assert.equal(resumeEntry.title, 'Vigil resumed');
+      assert.equal(resumeEntry.cause, 'Resumed after browser restart');
+      assert.equal(resumeEntry.timestamp, now);
+
+      // Ambient tier must NEVER fire a desktop notification per SPEC §10
+      assert.equal(notifications._getNotifications().length, 0);
     });
   });
 

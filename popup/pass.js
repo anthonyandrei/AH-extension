@@ -530,6 +530,98 @@ export function diffHeldCourses({
 }
 
 /**
+ * Detects and records Ambient ledger entries for subject acquisitions and section upgrades
+ * between pre- and post-held snapshots.
+ *
+ * @param {{
+ *   plan?: { subjects?: Array<object> },
+ *   preHeldSnapshot?: Record<string|number, number|null>,
+ *   postHeldSnapshot?: Record<string|number, number|null>,
+ *   courses?: Array<object>,
+ *   storageApi?: object,
+ *   notificationsApi?: object,
+ *   alarmsApi?: object,
+ *   now?: number
+ * }} params
+ * @returns {Promise<Array<object>>} List of emitted ledger entries
+ */
+export async function recordAcquisitionsAndUpgrades({
+  plan,
+  preHeldSnapshot = {},
+  postHeldSnapshot = {},
+  courses = [],
+  storageApi,
+  notificationsApi,
+  alarmsApi,
+  now = Date.now(),
+}) {
+  if (!plan || !Array.isArray(plan.subjects) || !preHeldSnapshot || !postHeldSnapshot) {
+    return [];
+  }
+
+  const emittedEntries = [];
+
+  for (const subject of plan.subjects) {
+    const cid = subject.courseCreationId;
+    const wantedId = subject.sectionCreationId;
+    const preHeld = preHeldSnapshot[cid] !== undefined ? preHeldSnapshot[cid] : preHeldSnapshot[String(cid)];
+    const postHeld = postHeldSnapshot[cid] !== undefined ? postHeldSnapshot[cid] : postHeldSnapshot[String(cid)];
+
+    // 1. Subject Acquired: was unheld, now held
+    if ((preHeld === null || preHeld === undefined) && (postHeld !== null && postHeld !== undefined)) {
+      const course = courses.find((c) => idEquals(c.courseCreationId, cid));
+      const section = course?.sections?.find((s) => idEquals(s.sectionCreationId, postHeld));
+      const secCode = section
+        ? (section.sectionCode || section.sectionName)
+        : (idEquals(postHeld, wantedId) ? subject.sectionCode : String(postHeld));
+
+      const entry = {
+        tier: 'ambient',
+        type: 'acquired',
+        title: 'Subject acquired',
+        cause: `${subject.courseCode} (${secCode})`,
+        timestamp: now,
+      };
+
+      await appendLedgerEntry({
+        entry,
+        storageApi,
+        notificationsApi,
+        alarmsApi,
+        now,
+      });
+      emittedEntries.push(entry);
+    }
+    // 2. Section Upgraded: was held at a non-wanted section, now held at Wanted Section
+    else if (
+      preHeld !== null &&
+      preHeld !== undefined &&
+      !idEquals(preHeld, wantedId) &&
+      idEquals(postHeld, wantedId)
+    ) {
+      const entry = {
+        tier: 'ambient',
+        type: 'upgraded',
+        title: 'Section upgraded',
+        cause: `${subject.courseCode} (${subject.sectionCode})`,
+        timestamp: now,
+      };
+
+      await appendLedgerEntry({
+        entry,
+        storageApi,
+        notificationsApi,
+        alarmsApi,
+        now,
+      });
+      emittedEntries.push(entry);
+    }
+  }
+
+  return emittedEntries;
+}
+
+/**
  * Handles Vigil completion when all subjects are satisfied.
  * Persists complete state, clears pass alarm, updates badge, logs completion notice, and appends pass record.
  *
@@ -894,6 +986,17 @@ export async function executePass({
         });
       }
     }
+
+    await recordAcquisitionsAndUpgrades({
+      plan,
+      preHeldSnapshot: previousHeldSnapshot,
+      postHeldSnapshot: currentHeldSnapshot,
+      courses,
+      storageApi,
+      notificationsApi,
+      alarmsApi,
+      now,
+    });
   }
 
   const resetResult = detectResetConditions({
@@ -1133,6 +1236,17 @@ export async function executePass({
         });
       }
     }
+
+    await recordAcquisitionsAndUpgrades({
+      plan,
+      preHeldSnapshot: currentHeldSnapshot,
+      postHeldSnapshot,
+      courses: postCourses,
+      storageApi,
+      notificationsApi,
+      alarmsApi,
+      now,
+    });
 
     // Reconcile against post-write catalogue
     const postReconciliation = reconcilePlan({ plan, courses: postCourses });

@@ -576,6 +576,20 @@ export async function rebuildAlarmsFromStorage({
       }
     }
 
+    await appendLedgerEntry({
+      entry: {
+        tier: 'ambient',
+        type: 'resumed',
+        title: 'Vigil resumed',
+        cause: 'Resumed after browser restart',
+        timestamp: now,
+      },
+      storageApi,
+      notificationsApi,
+      alarmsApi,
+      now,
+    });
+
     return {
       state: 'watching',
       vigil,

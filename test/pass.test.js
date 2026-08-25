@@ -11,6 +11,7 @@ import {
   executePass,
   stopVigil,
   diffHeldCourses,
+  recordAcquisitionsAndUpgrades,
   checkStall,
   handleStall,
   DISPOSITIONS,
@@ -1053,6 +1054,202 @@ describe('pass module', () => {
       assert.equal(action._getBadge().color, '#10B981');
     });
 
+    it('on actionable dispositions when strike acquires an unheld subject: logs Ambient "Subject acquired" ledger entry and updates badge without firing notification', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' },
+            { courseCreationId: 102, courseCode: 'MATH101', sectionCreationId: 601, sectionCode: 'M01' },
+          ],
+        },
+        ownedTabId: 101,
+        ledger: [],
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          return { success: true, clicked: true, saveGateApproved: true };
+        }
+        return { success: true };
+      };
+
+      let fetchCallCount = 0;
+      const mockFetch = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `
+              <input id="hdfAcademicSessionId" value="10" />
+              <input id="hdfRuleAllocationId" value="20" />
+              <input id="hdfEnlistmentRuleId" value="30" />
+            `,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          fetchCallCount++;
+          // First read: both unheld (SECTION_CREATION_ID: null)
+          // Second read: 101 is acquired at 502, 102 is still unheld
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: fetchCallCount === 1 ? null : 502, IS_REGISTERED: fetchCallCount === 1 ? 0 : 1 },
+                { COURSE_CREATION_ID: 102, COURSE_CODE: 'MATH101', SECTION_CREATION_ID: null, IS_REGISTERED: 0 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'G02 {Avail. Slots: 5}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 5000,
+      });
+
+      assert.equal(result.isComplete, true);
+      assert.equal(result.strikePerformed, true);
+      assert.equal(result.unresolvedCount, 1); // 1 subject still watching (MATH101)
+      assert.equal(result.allSatisfied, false);
+
+      const store = storage._getStore();
+      assert.equal(action._getBadge().text, '1'); // Badge decremented to 1
+      assert.equal(action._getBadge().color, '#4285F4');
+
+      // Ambient Subject acquired entry logged
+      const ledger = store.ledger || [];
+      const acquiredEntry = ledger.find((e) => e.type === 'acquired');
+      assert.ok(acquiredEntry, 'Subject acquired entry must exist in ledger');
+      assert.equal(acquiredEntry.tier, 'ambient');
+      assert.equal(acquiredEntry.title, 'Subject acquired');
+      assert.equal(acquiredEntry.cause, 'CS101 (G02)');
+
+      // No desktop notifications for Ambient event
+      assert.equal(notifications._getNotifications().length, 0);
+    });
+
+    it('on actionable dispositions when strike upgrades a backup section: logs Ambient "Section upgraded" ledger entry', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' },
+          ],
+        },
+        ownedTabId: 101,
+        ledger: [],
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          return { success: true, clicked: true, saveGateApproved: true };
+        }
+        return { success: true };
+      };
+
+      let fetchCallCount = 0;
+      const mockFetch = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `
+              <input id="hdfAcademicSessionId" value="10" />
+              <input id="hdfRuleAllocationId" value="20" />
+              <input id="hdfEnlistmentRuleId" value="30" />
+            `,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          fetchCallCount++;
+          // First read: held at backup 501
+          // Second read: held at wanted 502
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [
+                { COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: fetchCallCount === 1 ? 501 : 502, IS_REGISTERED: 1 },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => [
+              { COURSE_CREATION_ID: 101, SECTION_CREATION_ID: 502, SECTION_NAME: 'G02 {Avail. Slots: 5}' },
+            ],
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 5000,
+      });
+
+      assert.equal(result.isComplete, true);
+      assert.equal(result.state, 'complete');
+
+      const store = storage._getStore();
+      const ledger = store.ledger || [];
+
+      // Section upgraded Ambient entry present
+      const upgradeEntry = ledger.find((e) => e.type === 'upgraded');
+      assert.ok(upgradeEntry, 'Section upgraded entry must exist in ledger');
+      assert.equal(upgradeEntry.tier, 'ambient');
+      assert.equal(upgradeEntry.title, 'Section upgraded');
+      assert.equal(upgradeEntry.cause, 'CS101 (G02)');
+
+      // Vigil complete Notice entry present
+      const completeEntry = ledger.find((e) => e.type === 'complete');
+      assert.ok(completeEntry, 'Complete notice entry must exist');
+      assert.equal(completeEntry.tier, 'notice');
+
+      // Only 1 notification fired (for the Notice complete tier, none for the Ambient upgrade)
+      assert.equal(notifications._getNotifications().length, 1);
+      assert.equal(notifications._getNotifications()[0].options.title, 'Vigil complete');
+    });
+
     it('on post-write shrink (Lost Slot): produces Notice notification and ledger entry without stopping the Vigil', async () => {
       const storage = createMockStorage({
         vigil: { state: 'watching', lastChangeAt: 1000 },
@@ -1645,6 +1842,150 @@ describe('pass module', () => {
       assert.equal(result.lostSlots[0].courseCreationId, '101');
       assert.equal(result.lostSlots[0].courseCode, 'CS101');
       assert.equal(result.lostSlots[0].preHeldSectionCreationId, 501);
+    });
+  });
+
+  describe('recordAcquisitionsAndUpgrades', () => {
+    const plan = {
+      subjects: [
+        { courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' },
+        { courseCreationId: 102, courseCode: 'MATH101', sectionCreationId: 601, sectionCode: 'M01' },
+      ],
+    };
+    const courses = [
+      {
+        courseCreationId: 101,
+        courseCode: 'CS101',
+        sections: [
+          { sectionCreationId: 501, sectionCode: 'G01' },
+          { sectionCreationId: 502, sectionCode: 'G02' },
+        ],
+      },
+      {
+        courseCreationId: 102,
+        courseCode: 'MATH101',
+        sections: [
+          { sectionCreationId: 601, sectionCode: 'M01' },
+        ],
+      },
+    ];
+
+    it('emits Ambient "Subject acquired" entry when an unheld subject is secured into held status', async () => {
+      const storage = createMockStorage({ ledger: [] });
+      const notifications = createMockNotifications();
+      const alarms = createMockAlarms();
+      const now = 1756180000000;
+
+      const preHeld = { 101: null, 102: null };
+      const postHeld = { 101: 502, 102: null }; // 101 acquired!
+
+      const emitted = await recordAcquisitionsAndUpgrades({
+        plan,
+        preHeldSnapshot: preHeld,
+        postHeldSnapshot: postHeld,
+        courses,
+        storageApi: storage,
+        notificationsApi: notifications,
+        alarmsApi: alarms,
+        now,
+      });
+
+      assert.equal(emitted.length, 1);
+      assert.equal(emitted[0].tier, 'ambient');
+      assert.equal(emitted[0].type, 'acquired');
+      assert.equal(emitted[0].title, 'Subject acquired');
+      assert.equal(emitted[0].cause, 'CS101 (G02)');
+      assert.equal(emitted[0].timestamp, now);
+
+      const store = storage._getStore();
+      assert.equal(store.ledger.length, 1);
+      assert.equal(store.ledger[0].title, 'Subject acquired');
+      assert.equal(notifications._getNotifications().length, 0); // Never notify on Ambient
+    });
+
+    it('emits Ambient "Section upgraded" entry when a backup section is switched to Wanted Section', async () => {
+      const storage = createMockStorage({ ledger: [] });
+      const notifications = createMockNotifications();
+      const alarms = createMockAlarms();
+      const now = 1756180000000;
+
+      const preHeld = { 101: 501, 102: null }; // 101 held at 501 (backup)
+      const postHeld = { 101: 502, 102: null }; // 101 upgraded to 502 (wanted)
+
+      const emitted = await recordAcquisitionsAndUpgrades({
+        plan,
+        preHeldSnapshot: preHeld,
+        postHeldSnapshot: postHeld,
+        courses,
+        storageApi: storage,
+        notificationsApi: notifications,
+        alarmsApi: alarms,
+        now,
+      });
+
+      assert.equal(emitted.length, 1);
+      assert.equal(emitted[0].tier, 'ambient');
+      assert.equal(emitted[0].type, 'upgraded');
+      assert.equal(emitted[0].title, 'Section upgraded');
+      assert.equal(emitted[0].cause, 'CS101 (G02)');
+      assert.equal(emitted[0].timestamp, now);
+
+      const store = storage._getStore();
+      assert.equal(store.ledger.length, 1);
+      assert.equal(store.ledger[0].title, 'Section upgraded');
+      assert.equal(notifications._getNotifications().length, 0); // Never notify on Ambient
+    });
+
+    it('does not emit entries when held states are unchanged or already satisfied', async () => {
+      const storage = createMockStorage({ ledger: [] });
+      const notifications = createMockNotifications();
+      const alarms = createMockAlarms();
+
+      const preHeld = { 101: 502, 102: null };
+      const postHeld = { 101: 502, 102: null }; // No change
+
+      const emitted = await recordAcquisitionsAndUpgrades({
+        plan,
+        preHeldSnapshot: preHeld,
+        postHeldSnapshot: postHeld,
+        courses,
+        storageApi: storage,
+        notificationsApi: notifications,
+        alarmsApi: alarms,
+      });
+
+      assert.equal(emitted.length, 0);
+      assert.equal(storage._getStore().ledger.length, 0);
+    });
+
+    it('emits multiple ambient entries when multiple subjects are acquired or upgraded in the same pass', async () => {
+      const storage = createMockStorage({ ledger: [] });
+      const notifications = createMockNotifications();
+      const alarms = createMockAlarms();
+      const now = 1756180000000;
+
+      const preHeld = { 101: 501, 102: null }; // 101 backup, 102 unheld
+      const postHeld = { 101: 502, 102: 601 }; // 101 upgraded, 102 acquired
+
+      const emitted = await recordAcquisitionsAndUpgrades({
+        plan,
+        preHeldSnapshot: preHeld,
+        postHeldSnapshot: postHeld,
+        courses,
+        storageApi: storage,
+        notificationsApi: notifications,
+        alarmsApi: alarms,
+        now,
+      });
+
+      assert.equal(emitted.length, 2);
+      assert.equal(emitted[0].title, 'Section upgraded');
+      assert.equal(emitted[0].cause, 'CS101 (G02)');
+      assert.equal(emitted[1].title, 'Subject acquired');
+      assert.equal(emitted[1].cause, 'MATH101 (M01)');
+
+      assert.equal(storage._getStore().ledger.length, 2);
+      assert.equal(notifications._getNotifications().length, 0);
     });
   });
 
