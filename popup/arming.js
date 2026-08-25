@@ -268,7 +268,7 @@ export async function transitionArmedToWatching({
   };
 
   if (storageApi?.set) {
-    await storageApi.set({ vigil: updatedVigil });
+    await storageApi.set({ vigil: updatedVigil, lastCompletePassAt: now });
   }
   if (alarmsApi?.clear) {
     await alarmsApi.clear('vigil_start');
@@ -414,7 +414,7 @@ export async function armVigil({
     };
 
     if (storageApi?.set) {
-      await storageApi.set({ vigil, plan: planToSave });
+      await storageApi.set({ vigil, plan: planToSave, lastCompletePassAt: now });
     }
     if (alarmsApi?.clear) {
       await alarmsApi.clear('vigil_start');
@@ -613,6 +613,17 @@ export async function rebuildAlarmsFromStorage({
 
     return {
       state: 'watching',
+      vigil,
+    };
+  }
+
+  if (vigil.state === 'stall') {
+    updateBadge({
+      state: 'stall',
+      actionApi,
+    });
+    return {
+      state: 'stall',
       vigil,
     };
   }

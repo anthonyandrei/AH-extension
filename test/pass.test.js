@@ -11,6 +11,8 @@ import {
   executePass,
   stopVigil,
   diffHeldCourses,
+  checkStall,
+  handleStall,
   DISPOSITIONS,
 } from '../popup/pass.js';
 import { PAGE_STATES } from '../content/classifier.js';
@@ -84,11 +86,13 @@ function createMockAction() {
 function createMockNotifications() {
   const list = [];
   return {
-    create: (opts) => {
+    create: (idOrOpts, maybeOpts) => {
+      const opts = typeof idOrOpts === 'object' ? idOrOpts : maybeOpts;
       list.push(opts);
     },
     clear: () => {},
     _getList: () => list,
+    _getNotifications: () => list.map((opts, idx) => ({ id: `notif_${idx}`, options: opts })),
   };
 }
 
@@ -1275,5 +1279,561 @@ describe('pass module', () => {
       assert.equal(result.lostSlots[0].preHeldSectionCreationId, 501);
     });
   });
+
+  describe('checkStall helper', () => {
+    it('returns false when elapsed time since lastCompletePassAt is under 10 minutes (600,000 ms)', () => {
+      const baseTime = 1756180000000;
+      assert.equal(checkStall({ lastCompletePassAt: baseTime, now: baseTime }), false);
+      assert.equal(checkStall({ lastCompletePassAt: baseTime, now: baseTime + 2000 }), false);
+      assert.equal(checkStall({ lastCompletePassAt: baseTime, now: baseTime + 540000 }), false); // 9 minutes
+      assert.equal(checkStall({ lastCompletePassAt: baseTime, now: baseTime + 599999 }), false);
+    });
+
+    it('returns true when elapsed time since lastCompletePassAt reaches or exceeds 10 minutes (600,000 ms)', () => {
+      const baseTime = 1756180000000;
+      assert.equal(checkStall({ lastCompletePassAt: baseTime, now: baseTime + 600000 }), true); // exactly 10 min
+      assert.equal(checkStall({ lastCompletePassAt: baseTime, now: baseTime + 900000 }), true); // 15 min
+    });
+
+    it('falls back to startedAt when lastCompletePassAt is undefined', () => {
+      const startTime = 1756180000000;
+      assert.equal(checkStall({ startedAt: startTime, now: startTime + 300000 }), false); // 5 min
+      assert.equal(checkStall({ startedAt: startTime, now: startTime + 600000 }), true); // 10 min
+    });
+
+    it('falls back to now (0 elapsed) when both lastCompletePassAt and startedAt are missing', () => {
+      assert.equal(checkStall({ now: 1756180000000 }), false);
+    });
+
+    it('respects a custom thresholdMs parameter', () => {
+      const baseTime = 1756180000000;
+      assert.equal(checkStall({ lastCompletePassAt: baseTime, now: baseTime + 30000, thresholdMs: 30000 }), true);
+      assert.equal(checkStall({ lastCompletePassAt: baseTime, now: baseTime + 29000, thresholdMs: 30000 }), false);
+    });
+  });
+
+  describe('handleStall helper', () => {
+    it('sets vigil to stall, clears vigil_pass alarm, sets badge to !! red, logs Alert to ledger & activeAlert, and appends to passTail', async () => {
+      const now = 1756180000000;
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: now - 600000 },
+        passTail: [],
+      });
+      const alarms = createMockAlarms();
+      alarms.create('vigil_pass', { delayInMinutes: 0.1 });
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+
+      const updatedVigil = await handleStall({
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        vigil: { state: 'watching', lastChangeAt: now - 600000 },
+        now,
+        cause: '10 minutes without a complete pass',
+        state: PAGE_STATES.STEP2_BOUND,
+      });
+
+      assert.equal(updatedVigil.state, 'stall');
+      assert.equal(updatedVigil.nextFireTime, null);
+      assert.equal(updatedVigil.lastChangeAt, now);
+
+      // Storage updated
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'stall');
+
+      // Alarm cleared
+      assert.equal((await alarms.get('vigil_pass')), null);
+
+      // Badge set to !! red
+      assert.equal(action._getBadge().text, '!!');
+      assert.equal(action._getBadge().color, '#EF4444');
+
+      // Alert notification sent
+      assert.equal(notifications._getNotifications().length, 1);
+      assert.equal(notifications._getNotifications()[0].options.title, 'Stall');
+
+      // Active alert set for 30m repeat
+      assert.deepStrictEqual(store.activeAlert, {
+        type: 'stall',
+        timestamp: now,
+        repeatCount: 0,
+        title: 'Stall',
+        cause: '10 minutes without a complete pass',
+      });
+      assert.ok(alarms._getAlarms().has('alert_repeat'));
+
+      // Event ledger entry added
+      assert.equal(store.ledger.length, 1);
+      assert.equal(store.ledger[0].tier, 'alert');
+      assert.equal(store.ledger[0].type, 'stall');
+
+      // Pass tail recorded
+      assert.equal(store.passTail.length, 1);
+      assert.equal(store.passTail[0].complete, false);
+      assert.match(store.passTail[0].summary, /stall/i);
+    });
+  });
+
+  describe('Stall clock integration in executePass', () => {
+    it('raises exactly one Stall after 10 minutes of consecutive Save Gate refusals', async () => {
+      const startTime = 1756180000000;
+      const now = startTime + 600000; // 10 minutes later
+
+      const storage = createMockStorage({
+        vigil: { state: 'watching', startedAt: startTime, lastChangeAt: startTime },
+        plan: {
+          subjects: [{ courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 502, sectionCode: 'G02' }],
+        },
+        ownedTabId: 101,
+        lastCompletePassAt: startTime,
+      });
+      const alarms = createMockAlarms();
+      alarms.create('vigil_pass', { delayInMinutes: 0.1 });
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      // Mock classify: Step2Bound
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') {
+          return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        }
+        if (msg.type === 'EXECUTE_STRIKE') {
+          // Save Gate refuses!
+          return { success: false, clicked: false, reason: 'Save Gate refused: held course missing' };
+        }
+        return { success: true };
+      };
+
+      const mockFetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          CourseDetails: [{ COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: null }],
+        }),
+      });
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now,
+      });
+
+      assert.equal(result.isComplete, false);
+      assert.equal(result.state, 'stall');
+
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'stall');
+      assert.equal(action._getBadge().text, '!!');
+      assert.equal(action._getBadge().color, '#EF4444');
+      assert.equal(notifications._getNotifications().length, 1);
+      assert.equal(notifications._getNotifications()[0].options.title, 'Stall');
+      assert.equal(store.ledger.length, 1);
+      assert.equal(store.ledger[0].tier, 'alert');
+      assert.equal(store.ledger[0].type, 'stall');
+      assert.equal((await alarms.get('vigil_pass')), null);
+    });
+
+    it('raises exactly one Stall after 10 minutes of consecutive HTTP 500 hard errors', async () => {
+      const startTime = 1756180000000;
+      const now = startTime + 600000; // 10 minutes later
+
+      const storage = createMockStorage({
+        vigil: { state: 'watching', startedAt: startTime, lastChangeAt: startTime },
+        plan: {
+          subjects: [{ courseCreationId: 101, sectionCreationId: 501 }],
+        },
+        ownedTabId: 101,
+        lastCompletePassAt: startTime,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+      tabs.sendMessage = async () => ({ success: true, state: PAGE_STATES.STEP2_BOUND });
+
+      const mockFetch = async () => ({
+        ok: false,
+        status: 500,
+        text: async () => 'Internal Server Error',
+      });
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now,
+      });
+
+      assert.equal(result.isComplete, false);
+      assert.equal(result.state, 'stall');
+      assert.equal(result.error, 500);
+
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'stall');
+      assert.equal(action._getBadge().text, '!!');
+      assert.equal(notifications._getNotifications().length, 1);
+      assert.equal(store.ledger.length, 1);
+      assert.equal(store.ledger[0].type, 'stall');
+    });
+
+    it('raises exactly one Stall after 10 minutes of consecutive 429 rate limits', async () => {
+      const startTime = 1756180000000;
+      const now = startTime + 600000;
+
+      const storage = createMockStorage({
+        vigil: { state: 'watching', startedAt: startTime, lastChangeAt: startTime },
+        plan: {
+          subjects: [{ courseCreationId: 101, sectionCreationId: 501 }],
+        },
+        ownedTabId: 101,
+        lastCompletePassAt: startTime,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+      tabs.sendMessage = async () => ({ success: true, state: PAGE_STATES.STEP2_BOUND });
+
+      const mockFetch = async () => ({
+        ok: false,
+        status: 429,
+        text: async () => 'Rate Limited',
+      });
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now,
+      });
+
+      assert.equal(result.isComplete, false);
+      assert.equal(result.state, 'stall');
+      assert.equal(result.error, 429);
+
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'stall');
+      assert.equal(action._getBadge().text, '!!');
+    });
+
+    it('raises exactly one Stall after 10 minutes of settling / steer delay', async () => {
+      const startTime = 1756180000000;
+      const now = startTime + 600000;
+
+      const storage = createMockStorage({
+        vigil: { state: 'watching', startedAt: startTime, lastChangeAt: startTime },
+        plan: {
+          subjects: [{ courseCreationId: 101, sectionCreationId: 501 }],
+        },
+        ownedTabId: 101,
+        lastCompletePassAt: startTime,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+      tabs.sendMessage = async () => ({ success: true, state: PAGE_STATES.SETTLING });
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        now,
+      });
+
+      assert.equal(result.isComplete, false);
+      assert.equal(result.state, 'stall');
+
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'stall');
+      assert.equal(action._getBadge().text, '!!');
+    });
+
+    it('raises exactly one Stall after 10 minutes of mixed failures (500s, Save Gate refusals, and settling)', async () => {
+      const startTime = 1756180000000;
+      const storage = createMockStorage({
+        vigil: { state: 'watching', startedAt: startTime, lastChangeAt: startTime },
+        plan: {
+          subjects: [{ courseCreationId: 101, sectionCreationId: 501 }],
+        },
+        ownedTabId: 101,
+        lastCompletePassAt: startTime,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      // Minute 2: Settling (incomplete pass, no stall)
+      tabs.sendMessage = async () => ({ success: true, state: PAGE_STATES.SETTLING });
+      await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        now: startTime + 120000,
+      });
+      assert.equal(storage._getStore().vigil.state, 'watching');
+      assert.equal(notifications._getNotifications().length, 0);
+
+      // Minute 5: 500 error (incomplete pass, no stall)
+      tabs.sendMessage = async () => ({ success: true, state: PAGE_STATES.STEP2_BOUND });
+      const mockFetch500 = async () => ({ ok: false, status: 500 });
+      await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch500,
+        now: startTime + 300000,
+      });
+      assert.equal(storage._getStore().vigil.state, 'watching');
+      assert.equal(notifications._getNotifications().length, 0);
+
+      // Minute 10: Save Gate refusal -> 10 minutes with no complete pass -> Stall!
+      tabs.sendMessage = async (id, msg) => {
+        if (msg.type === 'CLASSIFY_PAGE') return { success: true, state: PAGE_STATES.STEP2_BOUND };
+        if (msg.type === 'EXECUTE_STRIKE') return { success: false, clicked: false, reason: 'unapproved' };
+        return { success: true };
+      };
+      const mockFetchOk = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          CourseDetails: [{ COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: null }],
+        }),
+      });
+
+      const finalResult = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetchOk,
+        now: startTime + 600000,
+      });
+
+      assert.equal(finalResult.isComplete, false);
+      assert.equal(finalResult.state, 'stall');
+
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'stall');
+      assert.equal(action._getBadge().text, '!!');
+      assert.equal(notifications._getNotifications().length, 1);
+      assert.equal(store.ledger.length, 1);
+    });
+
+    it('10 minutes of Vigil correctly finding Wanted Sections full writes lastCompletePassAt fresh and NEVER raises a Stall', async () => {
+      const startTime = 1756180000000;
+      const storage = createMockStorage({
+        vigil: { state: 'watching', startedAt: startTime, lastChangeAt: startTime },
+        plan: {
+          subjects: [{ courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 501, sectionCode: 'G01' }],
+        },
+        ownedTabId: 101,
+        lastCompletePassAt: startTime,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+      tabs.sendMessage = async () => ({ success: true, state: PAGE_STATES.STEP2_BOUND });
+
+      // Mock catalogue: Section 501 is full / absent -> no actionable dispositions (watching)
+      const mockFetch = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `<input id="hdfAcademicSessionId" value="10" /><input id="hdfRuleAllocationId" value="20" /><input id="hdfEnlistmentRuleId" value="30" />`,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [{ COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: null, IS_REGISTERED: 0 }],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return { ok: true, status: 200, json: async () => [] };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      // Simulate passes at t=1m, t=3m, t=6m, t=9m, t=10m, t=12m
+      const timestamps = [
+        startTime + 60000,
+        startTime + 180000,
+        startTime + 360000,
+        startTime + 540000,
+        startTime + 600000,
+        startTime + 720000,
+      ];
+
+      for (const ts of timestamps) {
+        const res = await executePass({
+          tabsApi: tabs,
+          storageApi: storage,
+          alarmsApi: alarms,
+          actionApi: action,
+          notificationsApi: notifications,
+          fetchImpl: mockFetch,
+          now: ts,
+        });
+
+        assert.equal(res.isComplete, true);
+        assert.equal(res.state, 'watching');
+        assert.equal(storage._getStore().lastCompletePassAt, ts); // Written fresh every complete pass
+      }
+
+      // 12 minutes elapsed total, but every pass was complete -> NO Stall!
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'watching');
+      assert.equal(action._getBadge().text, '1'); // Badge is count 1 (blue), not '!!'
+      assert.equal(action._getBadge().color, '#4285F4');
+      assert.equal(notifications._getNotifications().length, 0); // No alert notifications
+    });
+
+    it('a complete Pass occurring after a near-Stall (minute 9) resets lastCompletePassAt and prevents Stall at minute 14', async () => {
+      const startTime = 1756180000000;
+      const storage = createMockStorage({
+        vigil: { state: 'watching', startedAt: startTime, lastChangeAt: startTime },
+        plan: {
+          subjects: [{ courseCreationId: 101, courseCode: 'CS101', sectionCreationId: 501, sectionCode: 'G01' }],
+        },
+        ownedTabId: 101,
+        lastCompletePassAt: startTime,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+      tabs.sendMessage = async () => ({ success: true, state: PAGE_STATES.STEP2_BOUND });
+
+      // Minute 9: Near-stall (failing passes up to 9 mins)
+      const mockFetch500 = async () => ({ ok: false, status: 500 });
+      const nearStallRes = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch500,
+        now: startTime + 540000, // Minute 9
+      });
+      assert.equal(nearStallRes.isComplete, false);
+      assert.equal(storage._getStore().vigil.state, 'watching'); // Not stalled yet
+
+      // Minute 9 + 5s: Complete Pass occurs! (Server recovers, reads catalogue, section full)
+      const minute9CompleteTime = startTime + 545000;
+      const mockFetchOk = async (url) => {
+        if (url.includes('/Enlistment_V2/Index')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => `<input id="hdfAcademicSessionId" value="10" /><input id="hdfRuleAllocationId" value="20" /><input id="hdfEnlistmentRuleId" value="30" />`,
+          };
+        }
+        if (url.includes('/GetAllCourseSectionData/')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              CourseDetails: [{ COURSE_CREATION_ID: 101, COURSE_CODE: 'CS101', SECTION_CREATION_ID: null, IS_REGISTERED: 0 }],
+            }),
+          };
+        }
+        if (url.includes('/GetCourseWiseSectionData/')) {
+          return { ok: true, status: 200, json: async () => [] };
+        }
+        return { ok: true, status: 200, json: async () => ({}) };
+      };
+
+      const completeRes = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetchOk,
+        now: minute9CompleteTime,
+      });
+
+      assert.equal(completeRes.isComplete, true);
+      assert.equal(storage._getStore().lastCompletePassAt, minute9CompleteTime); // Reset to minute 9!
+
+      // Minute 14: 500 error again (14 minutes from start, but only 5 minutes from last complete pass)
+      const minute14Res = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch500,
+        now: startTime + 840000, // Minute 14
+      });
+
+      assert.equal(minute14Res.isComplete, false);
+      assert.equal(minute14Res.error, 500);
+      assert.equal(storage._getStore().vigil.state, 'watching'); // No stall fires at minute 14!
+      assert.equal(notifications._getNotifications().length, 0);
+    });
+
+    it('stopping a stalled Vigil via stopVigil clears alarms, resolves active alert, clears badge, and leaves plan intact', async () => {
+      const now = 1756180000000;
+      const storedPlan = {
+        subjects: [{ courseCode: 'CS101', sectionCode: 'G01' }],
+      };
+      const storage = createMockStorage({
+        vigil: { state: 'stall', lastChangeAt: now },
+        plan: storedPlan,
+        activeAlert: { type: 'stall', timestamp: now, repeatCount: 1, title: 'Stall' },
+      });
+      const alarms = createMockAlarms();
+      alarms.create('alert_repeat', { delayInMinutes: 30 });
+      const action = createMockAction();
+      action.setBadgeText({ text: '!!' });
+      action.setBadgeBackgroundColor({ color: '#EF4444' });
+      const notifications = createMockNotifications();
+
+      const result = await stopVigil({
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        now,
+      });
+
+      assert.equal(result.state, 'stopped');
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'stopped');
+      assert.deepStrictEqual(store.plan, storedPlan); // Plan preserved
+      assert.equal(store.activeAlert, undefined); // Alert resolved
+      assert.equal((await alarms.get('alert_repeat')), null); // Repeat alarm cleared
+      assert.equal(action._getBadge().text, ''); // Badge emptied
+    });
+  });
 });
+
 

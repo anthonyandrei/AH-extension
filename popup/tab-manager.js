@@ -340,7 +340,7 @@ export async function handleSessionProbe({
   };
 
   if (storageApi?.set) {
-    await storageApi.set({ vigil: updatedVigil });
+    await storageApi.set({ vigil: updatedVigil, lastCompletePassAt: now });
   }
 
   if (alarmsApi?.create) {

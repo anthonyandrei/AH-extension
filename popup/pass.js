@@ -84,6 +84,100 @@ export function computeNextPassDelay({
 }
 
 /**
+ * Evaluates whether 10 minutes (default 600,000 ms) have elapsed without a complete pass.
+ *
+ * @param {{
+ *   lastCompletePassAt?: number|null,
+ *   startedAt?: number|null,
+ *   now?: number,
+ *   thresholdMs?: number
+ * }} params
+ * @returns {boolean} True if stalled, false otherwise
+ */
+export function checkStall({
+  lastCompletePassAt,
+  startedAt,
+  now = Date.now(),
+  thresholdMs = 10 * 60 * 1000,
+}) {
+  const referenceTime = typeof lastCompletePassAt === 'number'
+    ? lastCompletePassAt
+    : (typeof startedAt === 'number' ? startedAt : now);
+  const elapsed = now - referenceTime;
+  return elapsed >= thresholdMs;
+}
+
+/**
+ * Handles a Stall condition: sets vigil state to 'stall', clears vigil_pass alarm,
+ * updates badge to '!!' red, appends an Alert entry to the event ledger and pass tail.
+ *
+ * @param {{
+ *   storageApi?: object,
+ *   alarmsApi?: object,
+ *   actionApi?: object,
+ *   notificationsApi?: object,
+ *   vigil?: object,
+ *   now?: number,
+ *   cause?: string,
+ *   state?: string
+ * }} params
+ * @returns {Promise<object>} Updated vigil record
+ */
+export async function handleStall({
+  storageApi,
+  alarmsApi,
+  actionApi,
+  notificationsApi,
+  vigil,
+  now = Date.now(),
+  cause = '10 minutes without a complete pass',
+  state = PAGE_STATES.STEP2_BOUND,
+}) {
+  const updatedVigil = {
+    ...(vigil || {}),
+    state: 'stall',
+    nextFireTime: null,
+    lastChangeAt: now,
+  };
+
+  if (storageApi?.set) {
+    await storageApi.set({ vigil: updatedVigil });
+  }
+
+  if (alarmsApi?.clear) {
+    await alarmsApi.clear('vigil_pass');
+  }
+
+  updateBadge({ state: 'stall', actionApi });
+
+  await appendLedgerEntry({
+    entry: {
+      tier: 'alert',
+      type: 'stall',
+      title: 'Stall',
+      cause,
+      timestamp: now,
+    },
+    storageApi,
+    notificationsApi,
+    alarmsApi,
+    now,
+  });
+
+  const passRecord = {
+    id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+    timestamp: now,
+    state,
+    complete: false,
+    summary: `Stall: ${cause}`,
+  };
+
+  await appendPassTail({ passRecord, storageApi });
+
+  return updatedVigil;
+}
+
+/**
  * Detects if any of the three reset conditions occurred for requested subjects:
  * 1. A Saved Slot appeared (previously unheld is now held).
  * 2. A Section appeared in dropdown options.
@@ -462,11 +556,12 @@ export async function executePass({
   now = Date.now(),
 } = {}) {
   const data = storageApi?.get
-    ? await storageApi.get(['vigil', 'plan', 'ownedTabId', 'lastSectionsSnapshot', 'lastHeldSnapshot'])
+    ? await storageApi.get(['vigil', 'plan', 'ownedTabId', 'lastSectionsSnapshot', 'lastHeldSnapshot', 'lastCompletePassAt'])
     : {};
   const vigil = data?.vigil;
   const plan = data?.plan;
   const ownedTabId = data?.ownedTabId;
+  const lastCompletePassAt = data?.lastCompletePassAt;
 
   if (!vigil || vigil.state !== 'watching') {
     return { isComplete: false, reason: 'not_watching' };
@@ -518,6 +613,21 @@ export async function executePass({
       return { isComplete: false, state: 'aborted' };
     }
 
+    // Check Stall Clock for prolonged non-Step2Bound conditions
+    if (checkStall({ lastCompletePassAt, startedAt: vigil.startedAt, now })) {
+      await handleStall({
+        storageApi,
+        alarmsApi,
+        actionApi,
+        notificationsApi,
+        vigil,
+        now,
+        cause: `Page state ${pageState} — 10 minutes without a complete pass`,
+        state: pageState,
+      });
+      return { isComplete: false, state: 'stall', reason: 'stall' };
+    }
+
     const nextDelay = computeNextPassDelay({
       lastChangeAt: vigil.lastChangeAt,
       now,
@@ -555,6 +665,20 @@ export async function executePass({
     const errorStatus = catalogue?.status;
 
     if (errorStatus === 429 || errorStatus === 403 || errorStatus === 500) {
+      if (checkStall({ lastCompletePassAt, startedAt: vigil.startedAt, now })) {
+        await handleStall({
+          storageApi,
+          alarmsApi,
+          actionApi,
+          notificationsApi,
+          vigil,
+          now,
+          cause: `HTTP ${errorStatus} response — 10 minutes without a complete pass`,
+          state: PAGE_STATES.STEP2_BOUND,
+        });
+        return { isComplete: false, state: 'stall', error: errorStatus };
+      }
+
       const updatedVigil = { ...vigil };
       if (errorStatus === 429 || errorStatus === 403) {
         updatedVigil.rateLimited = true;
@@ -589,6 +713,22 @@ export async function executePass({
       }
 
       return { isComplete: false, error: errorStatus };
+    }
+
+    if (catalogue?.error) {
+      if (checkStall({ lastCompletePassAt, startedAt: vigil.startedAt, now })) {
+        await handleStall({
+          storageApi,
+          alarmsApi,
+          actionApi,
+          notificationsApi,
+          vigil,
+          now,
+          cause: `Read failed (${catalogue.error}) — 10 minutes without a complete pass`,
+          state: PAGE_STATES.STEP2_BOUND,
+        });
+        return { isComplete: false, state: 'stall', error: catalogue.error };
+      }
     }
 
     // Session logged out mid-Vigil! Suspend the Vigil per SPEC §6, §9
@@ -724,6 +864,28 @@ export async function executePass({
 
     // If Save Gate refused or strike could not click
     if (!strikeResponse?.clicked) {
+      // Check Stall Clock for Save Gate refusal
+      if (checkStall({ lastCompletePassAt, startedAt: vigil.startedAt, now })) {
+        await handleStall({
+          storageApi,
+          alarmsApi,
+          actionApi,
+          notificationsApi,
+          vigil,
+          now,
+          cause: `Save Gate refused: ${strikeResponse?.reason || 'unapproved'} — 10 minutes without a complete pass`,
+          state: PAGE_STATES.STEP2_BOUND,
+        });
+        return {
+          isComplete: false,
+          state: 'stall',
+          strikePerformed: false,
+          saveGateApproved: false,
+          reason: strikeResponse?.reason,
+          reconciliation,
+        };
+      }
+
       const nextDelay = computeNextPassDelay({
         lastChangeAt: updatedVigil.lastChangeAt,
         now,

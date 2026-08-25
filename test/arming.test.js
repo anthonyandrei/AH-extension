@@ -304,6 +304,7 @@ describe('arming module', () => {
       assert.equal(updated.lastChangeAt, now);
 
       assert.equal(storage._getStore().vigil.state, 'watching');
+      assert.equal(storage._getStore().lastCompletePassAt, now);
       assert.equal(alarms._getAlarms().has('vigil_start'), false);
       assert.equal(alarms._getAlarms().has('vigil_keepalive'), false);
       assert.equal(action._getBadge().text, '2');
@@ -386,6 +387,7 @@ describe('arming module', () => {
       assert.equal(savedVigil.state, 'watching');
       assert.equal(savedVigil.nextFireTime, null);
       assert.equal(savedVigil.lastChangeAt, now);
+      assert.equal(storage._getStore().lastCompletePassAt, now);
 
       const savedPlan = storage._getStore().plan;
       assert.equal(savedPlan.startMode, 'now');
@@ -611,6 +613,36 @@ describe('arming module', () => {
       assert.equal(result.state, 'suspended');
       assert.ok(alarms._getAlarms().has('alert_repeat'));
       assert.equal(alarms._getAlarms().get('alert_repeat')?.delayInMinutes, 30);
+    });
+
+    it('restores !! red badge when vigil.state is stall on startup', async () => {
+      const now = 1756180000000;
+      const storage = createMockStorage({
+        vigil: {
+          state: 'stall',
+          lastChangeAt: now - 60000,
+        },
+        activeAlert: {
+          type: 'stall',
+          timestamp: now - 60000,
+          repeatCount: 0,
+          title: 'Stall',
+        },
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+
+      const result = await rebuildAlarmsFromStorage({
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        now,
+      });
+
+      assert.equal(result.state, 'stall');
+      assert.equal(action._getBadge().text, '!!');
+      assert.equal(action._getBadge().color, '#EF4444');
+      assert.ok(alarms._getAlarms().has('alert_repeat'));
     });
   });
 

@@ -372,7 +372,7 @@ function renderRunPanel() {
     })
     .join("");
 
-  const showStopButton = state === "watching" || state === "armed" || state === "suspended";
+  const showStopButton = state === "watching" || state === "armed" || state === "suspended" || state === "stall";
   const stopButtonHtml = showStopButton
     ? `<div style="margin-top: 16px;">
         <button type="button" id="stopVigilBtn" class="btn ${isStopConfirming ? 'btn-danger' : 'btn-ghost'} btn-block">
@@ -772,7 +772,7 @@ async function load() {
       }
     }
 
-    if (vigilData?.state === "watching" || vigilData?.state === "armed" || vigilData?.state === "suspended" || vigilData?.state === "complete") {
+    if (vigilData?.state === "watching" || vigilData?.state === "armed" || vigilData?.state === "suspended" || vigilData?.state === "complete" || vigilData?.state === "stall" || vigilData?.state === "aborted") {
       selectTab(tabRun);
     } else {
       selectTab(tabPlan);
