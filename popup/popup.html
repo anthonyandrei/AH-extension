@@ -79,7 +79,17 @@
   </div>
 
   <div id="panelReport" class="sec" role="tabpanel" aria-labelledby="tabReport" hidden>
-    <p class="empty">No Vigil has run yet.</p>
+    <div class="report-hdr">
+      <div class="b-filters" role="group" aria-label="Filter events">
+        <button type="button" class="b-filter" id="filterAll" aria-pressed="true">All</button>
+        <button type="button" class="b-filter" id="filterAlerts" aria-pressed="false">Alerts</button>
+        <button type="button" class="b-filter" id="filterNotices" aria-pressed="false">Notices</button>
+      </div>
+      <button type="button" id="exportBtn" class="btn btn-ghost btn-xs">Export</button>
+    </div>
+    <div id="reportList">
+      <p class="empty">No events recorded yet.</p>
+    </div>
   </div>
 
   <script type="module" src="popup.js"></script>

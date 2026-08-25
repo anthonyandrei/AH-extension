@@ -8,6 +8,7 @@ import {
   getDefaultStartTime,
   armVigil,
 } from "./arming.js";
+import { filterLedgerEntries, formatEventTime, exportPassTail } from "./reporting.js";
 
 // DOM Elements
 const tabPlan = document.getElementById("tabPlan");
@@ -38,10 +39,19 @@ const checklistItems = document.getElementById("checklistItems");
 
 const planStatus = document.getElementById("planStatus");
 
+const filterAll = document.getElementById("filterAll");
+const filterAlerts = document.getElementById("filterAlerts");
+const filterNotices = document.getElementById("filterNotices");
+const exportBtn = document.getElementById("exportBtn");
+const reportList = document.getElementById("reportList");
+
 // State
 let currentPlan = emptyPlan();
 let catalogueData = null;
 let vigilData = null;
+let ledgerData = [];
+let passTailData = [];
+let reportFilter = "all";
 let startMode = "at-time";
 let isRefused = false;
 
@@ -91,7 +101,7 @@ async function savePlan(plan) {
 }
 
 // Tab Switching
-function selectTab(selectedButton) {
+async function selectTab(selectedButton) {
   const tabs = [
     { button: tabPlan, panel: panelPlan },
     { button: tabRun, panel: panelRun },
@@ -107,6 +117,13 @@ function selectTab(selectedButton) {
     } else {
       panel.setAttribute("hidden", "");
     }
+  }
+
+  if (selectedButton === tabReport) {
+    const storageResult = await storageGet(["ledger", "passTail"]);
+    ledgerData = storageResult.ledger || [];
+    passTailData = storageResult.passTail || [];
+    renderReportPanel();
   }
 }
 
@@ -313,6 +330,52 @@ function renderRunPanel() {
   `;
 }
 
+function renderReportPanel() {
+  if (filterAll) filterAll.setAttribute("aria-pressed", String(reportFilter === "all"));
+  if (filterAlerts) filterAlerts.setAttribute("aria-pressed", String(reportFilter === "alerts"));
+  if (filterNotices) filterNotices.setAttribute("aria-pressed", String(reportFilter === "notices"));
+
+  if (!reportList) return;
+  reportList.replaceChildren();
+
+  if (!ledgerData || ledgerData.length === 0) {
+    reportList.innerHTML = '<p class="empty">No events recorded yet.</p>';
+    return;
+  }
+
+  const entries = filterLedgerEntries(ledgerData, reportFilter);
+  if (entries.length === 0) {
+    reportList.innerHTML = '<p class="empty">No matching events.</p>';
+    return;
+  }
+
+  for (const entry of entries) {
+    const evDiv = document.createElement("div");
+    evDiv.className = "ev";
+    evDiv.dataset.tier = entry.tier || "ambient";
+
+    const timeEl = document.createElement("time");
+    timeEl.textContent = formatEventTime(entry.timestamp);
+    evDiv.appendChild(timeEl);
+
+    const contentDiv = document.createElement("div");
+    const titleDiv = document.createElement("div");
+    titleDiv.className = "t";
+    titleDiv.textContent = entry.title || "";
+    contentDiv.appendChild(titleDiv);
+
+    if (entry.cause) {
+      const causeDiv = document.createElement("div");
+      causeDiv.className = "c";
+      causeDiv.textContent = entry.cause;
+      contentDiv.appendChild(causeDiv);
+    }
+
+    evDiv.appendChild(contentDiv);
+    reportList.appendChild(evDiv);
+  }
+}
+
 function render() {
   if (addCourse) addCourse.disabled = false;
   if (addBtn) addBtn.disabled = false;
@@ -428,6 +491,27 @@ function render() {
   renderChecklist();
   renderChip();
   renderRunPanel();
+  renderReportPanel();
+}
+
+// Report Filters & Export Handlers
+for (const [btn, filter] of [
+  [filterAll, "all"],
+  [filterAlerts, "alerts"],
+  [filterNotices, "notices"],
+]) {
+  if (btn) {
+    btn.addEventListener("click", () => {
+      reportFilter = filter;
+      renderReportPanel();
+    });
+  }
+}
+
+if (exportBtn) {
+  exportBtn.addEventListener("click", () => {
+    exportPassTail({ passTail: passTailData });
+  });
 }
 
 // Add Course Event Handler
@@ -542,15 +626,17 @@ async function load() {
   try {
     if (planStatus) planStatus.replaceChildren();
 
-    // Remove legacy keys and load stored plan & vigil
+    // Remove legacy keys and load stored plan & vigil & reporting state
     await storageRemove(["enlistedSubjects", "executionLog"]);
-    const storageResult = await storageGet(["plan", "vigil"]);
+    const storageResult = await storageGet(["plan", "vigil", "ledger", "passTail"]);
     currentPlan = storageResult.plan || emptyPlan();
     if (!Array.isArray(currentPlan.subjects)) {
       currentPlan = emptyPlan();
     }
 
     vigilData = storageResult.vigil || null;
+    ledgerData = storageResult.ledger || [];
+    passTailData = storageResult.passTail || [];
 
     if (currentPlan.startMode) {
       startMode = currentPlan.startMode;

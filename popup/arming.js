@@ -3,6 +3,7 @@
  */
 
 import { extractShellParams } from './catalogue.js';
+import { appendLedgerEntry } from './reporting.js';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -231,6 +232,17 @@ export async function transitionArmedToWatching({
     actionApi,
   });
 
+  await appendLedgerEntry({
+    entry: {
+      tier: 'ambient',
+      type: 'watching',
+      title: 'Vigil started',
+      cause: 'Start time reached',
+    },
+    storageApi,
+    now,
+  });
+
   return updatedVigil;
 }
 
@@ -340,6 +352,17 @@ export async function armVigil({
       actionApi,
     });
 
+    await appendLedgerEntry({
+      entry: {
+        tier: 'ambient',
+        type: 'watching',
+        title: 'Vigil started',
+        cause: `Watching ${plan.subjects.length} subject${plan.subjects.length === 1 ? '' : 's'}`,
+      },
+      storageApi,
+      now,
+    });
+
     return {
       success: true,
       state: 'watching',
@@ -374,6 +397,17 @@ export async function armVigil({
   updateBadge({
     state: 'armed',
     actionApi,
+  });
+
+  await appendLedgerEntry({
+    entry: {
+      tier: 'ambient',
+      type: 'armed',
+      title: 'Vigil armed',
+      cause: `Scheduled for ${formatDateTimeDisplay(startTime || nextFireTime)}`,
+    },
+    storageApi,
+    now,
   });
 
   return {

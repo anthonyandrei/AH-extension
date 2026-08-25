@@ -353,6 +353,11 @@ select.b-sel:focus, select:focus {
   font-size: 13px;
 }
 
+.btn-xs {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
 /* ---------- Status & Notes ---------- */
 #planStatus {
   margin-top: 10px;
@@ -515,6 +520,13 @@ details.a-more > summary:hover {
 .b-stat dd {
   font: 600 13px/1.1 var(--mono);
   color: var(--ink);
+}
+
+.report-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0 8px;
 }
 
 .b-filters {

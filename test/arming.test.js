@@ -268,6 +268,11 @@ describe('arming module', () => {
       assert.equal(alarms._getAlarms().has('vigil_keepalive'), false);
       assert.equal(action._getBadge().text, '2');
       assert.equal(action._getBadge().color, '#4285F4');
+
+      const ledger = storage._getStore().ledger;
+      assert.ok(Array.isArray(ledger) && ledger.length === 1);
+      assert.equal(ledger[0].tier, 'ambient');
+      assert.equal(ledger[0].title, 'Vigil started');
     });
   });
 
@@ -351,6 +356,11 @@ describe('arming module', () => {
       // Badge updated to watching (1 subject)
       assert.equal(action._getBadge().text, '1');
       assert.equal(action._getBadge().color, '#4285F4');
+
+      const ledger = storage._getStore().ledger;
+      assert.ok(Array.isArray(ledger) && ledger.length === 1);
+      assert.equal(ledger[0].tier, 'ambient');
+      assert.equal(ledger[0].title, 'Vigil started');
     });
 
     it('choosing "At a set time" in the future writes Vigil record as Armed and schedules one-shot alarm + keepalive alarm', async () => {
@@ -395,6 +405,11 @@ describe('arming module', () => {
       // Badge set to grey •
       assert.equal(action._getBadge().text, '•');
       assert.equal(action._getBadge().color, '#888888');
+
+      const ledger = storage._getStore().ledger;
+      assert.ok(Array.isArray(ledger) && ledger.length === 1);
+      assert.equal(ledger[0].tier, 'ambient');
+      assert.equal(ledger[0].title, 'Vigil armed');
     });
 
     it('choosing "At a set time" with a past timestamp starts watching immediately', async () => {
@@ -497,6 +512,11 @@ describe('arming module', () => {
       // Badge updated to watching (blue count 1)
       assert.equal(action._getBadge().text, '1');
       assert.equal(action._getBadge().color, '#4285F4');
+
+      const ledger = storage._getStore().ledger;
+      assert.ok(Array.isArray(ledger) && ledger.length === 1);
+      assert.equal(ledger[0].tier, 'ambient');
+      assert.equal(ledger[0].title, 'Vigil started');
     });
   });
 
