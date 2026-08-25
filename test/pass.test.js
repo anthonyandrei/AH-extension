@@ -368,9 +368,10 @@ describe('pass module', () => {
       assert.equal(result.disposition, DISPOSITIONS.UPGRADE);
       assert.equal(result.status, 'watching');
       assert.equal(result.isSatisfied, false);
+      assert.equal(result.heldSectionCreationId, 502);
     });
 
-    it('classifies held != wanted / absent (full) as keep_backup', () => {
+    it('classifies held != wanted / absent (full) as held_diff_absent', () => {
       const planSubject = {
         courseCreationId: 101,
         courseCode: 'CS101',
@@ -388,6 +389,7 @@ describe('pass module', () => {
       assert.equal(result.disposition, DISPOSITIONS.HELD_DIFF_ABSENT);
       assert.equal(result.status, 'watching');
       assert.equal(result.isSatisfied, false);
+      assert.equal(result.heldSectionCode, 'G02');
     });
 
     it('reconcilePlan reconciles all subjects and identifies unrequested held courses as preserve', () => {

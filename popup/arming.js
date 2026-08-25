@@ -604,7 +604,10 @@ export async function rebuildAlarmsFromStorage({
       }
       const existingPass = await alarmsApi.get('vigil_pass');
       if (!existingPass) {
-        alarmsApi.create('vigil_pass', { delayInMinutes: 0.01 });
+        const remainingMs = (typeof vigil.nextFireTime === 'number' && vigil.nextFireTime > now)
+          ? vigil.nextFireTime - now
+          : 0;
+        alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, remainingMs / 60000) });
       }
     }
 

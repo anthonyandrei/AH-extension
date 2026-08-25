@@ -16,7 +16,7 @@ export const DISPOSITIONS = Object.freeze({
   NONE_ABSENT: 'none_absent',
   SATISFIED: 'satisfied',
   UPGRADE: 'upgrade',
-  HELD_DIFF_ABSENT: 'keep_backup',
+  HELD_DIFF_ABSENT: 'held_diff_absent',
   PRESERVE: 'preserve',
 });
 
@@ -148,13 +148,17 @@ export function detectResetConditions({
  * @returns {object}
  */
 export function reconcileSubject({ planSubject, course }) {
+  const wantedId = planSubject.sectionCreationId;
+  const wantedCode = planSubject.sectionCode;
+
   if (!course) {
     return {
       courseCreationId: planSubject.courseCreationId,
       courseCode: planSubject.courseCode,
-      wantedSectionCreationId: planSubject.sectionCreationId,
-      wantedSectionCode: planSubject.sectionCode,
+      wantedSectionCreationId: wantedId,
+      wantedSectionCode: wantedCode,
       heldSectionCreationId: null,
+      heldSectionCode: null,
       disposition: DISPOSITIONS.NONE_ABSENT,
       status: 'watching',
       isSatisfied: false,
@@ -162,80 +166,44 @@ export function reconcileSubject({ planSubject, course }) {
     };
   }
 
-  const heldId = course.heldSectionCreationId !== undefined ? course.heldSectionCreationId : null;
-  const wantedId = planSubject.sectionCreationId;
+  const heldId = course.heldSectionCreationId !== undefined && course.heldSectionCreationId !== null
+    ? course.heldSectionCreationId
+    : null;
+
   const sections = Array.isArray(course.sections) ? course.sections : [];
-  const wantedFound = sections.find((s) => idEquals(s.sectionCreationId, wantedId));
-  const isWantedPresent = Boolean(wantedFound);
+  const heldSection = heldId !== null ? sections.find((s) => idEquals(s.sectionCreationId, heldId)) : null;
+  const heldSectionCode = heldSection ? (heldSection.sectionCode || heldSection.sectionName) : null;
 
-  // 1. None held
+  const wantedSection = sections.find((s) => idEquals(s.sectionCreationId, wantedId));
+  const isWantedPresent = Boolean(wantedSection);
+
+  let disposition = DISPOSITIONS.NONE_ABSENT;
+  let status = 'watching';
+  let isSatisfied = false;
+
   if (heldId === null) {
-    if (isWantedPresent) {
-      return {
-        courseCreationId: planSubject.courseCreationId,
-        courseCode: planSubject.courseCode,
-        wantedSectionCreationId: wantedId,
-        wantedSectionCode: planSubject.sectionCode,
-        heldSectionCreationId: null,
-        disposition: DISPOSITIONS.ACQUIRE,
-        status: 'watching',
-        isSatisfied: false,
-        isWantedPresent: true,
-      };
-    }
-    return {
-      courseCreationId: planSubject.courseCreationId,
-      courseCode: planSubject.courseCode,
-      wantedSectionCreationId: wantedId,
-      wantedSectionCode: planSubject.sectionCode,
-      heldSectionCreationId: null,
-      disposition: DISPOSITIONS.NONE_ABSENT,
-      status: 'watching',
-      isSatisfied: false,
-      isWantedPresent: false,
-    };
-  }
-
-  // 2. Held = Wanted
-  if (idEquals(heldId, wantedId)) {
-    return {
-      courseCreationId: planSubject.courseCreationId,
-      courseCode: planSubject.courseCode,
-      wantedSectionCreationId: wantedId,
-      wantedSectionCode: planSubject.sectionCode,
-      heldSectionCreationId: heldId,
-      disposition: DISPOSITIONS.SATISFIED,
-      status: 'satisfied',
-      isSatisfied: true,
-      isWantedPresent,
-    };
-  }
-
-  // 3. Held != Wanted
-  if (isWantedPresent) {
-    return {
-      courseCreationId: planSubject.courseCreationId,
-      courseCode: planSubject.courseCode,
-      wantedSectionCreationId: wantedId,
-      wantedSectionCode: planSubject.sectionCode,
-      heldSectionCreationId: heldId,
-      disposition: DISPOSITIONS.UPGRADE,
-      status: 'watching',
-      isSatisfied: false,
-      isWantedPresent: true,
-    };
+    disposition = isWantedPresent ? DISPOSITIONS.ACQUIRE : DISPOSITIONS.NONE_ABSENT;
+  } else if (idEquals(heldId, wantedId)) {
+    disposition = DISPOSITIONS.SATISFIED;
+    status = 'satisfied';
+    isSatisfied = true;
+  } else if (isWantedPresent) {
+    disposition = DISPOSITIONS.UPGRADE;
+  } else {
+    disposition = DISPOSITIONS.HELD_DIFF_ABSENT;
   }
 
   return {
     courseCreationId: planSubject.courseCreationId,
     courseCode: planSubject.courseCode,
     wantedSectionCreationId: wantedId,
-    wantedSectionCode: planSubject.sectionCode,
+    wantedSectionCode: wantedCode,
     heldSectionCreationId: heldId,
-    disposition: DISPOSITIONS.HELD_DIFF_ABSENT,
-    status: 'watching',
-    isSatisfied: false,
-    isWantedPresent: false,
+    heldSectionCode,
+    disposition,
+    status,
+    isSatisfied,
+    isWantedPresent,
   };
 }
 
@@ -433,7 +401,7 @@ export async function executePass({
   if (tabsApi && ownedTabId) {
     try {
       tabResponse = await tabsApi.sendMessage(ownedTabId, { type: 'CLASSIFY_PAGE' });
-      pageState = tabResponse?.state || PAGE_STATES.STEP2_BOUND;
+      pageState = tabResponse?.state || PAGE_STATES.NOT_INJECTED;
     } catch (_) {
       pageState = PAGE_STATES.NOT_INJECTED;
     }

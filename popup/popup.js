@@ -300,12 +300,30 @@ function populateAddCourse() {
 function renderRunPanel() {
   if (!panelRun) return;
 
-  if (!vigilData || vigilData.state === "none" || vigilData.state === "stopped") {
+  if (!vigilData || vigilData.state === "none") {
     panelRun.innerHTML = `<p class="empty">Nothing is running.<br><span style="font-size: 11px;">Arm a Vigil on the Plan tab.</span></p>`;
     return;
   }
 
   const state = vigilData.state;
+
+  if (state === "stopped") {
+    panelRun.innerHTML = `
+      <div style="padding: 12px 0 10px;">
+        <p style="font-size: 14px; font-weight: 600; letter-spacing: -0.01em;">Stopped</p>
+        <p class="muted" style="font-size: 11.5px; margin-top: 2px;">It will not resume</p>
+      </div>
+      <div style="margin-top: 14px;">
+        <button type="button" id="armAgainBtn" class="btn btn-primary btn-block">Arm again</button>
+      </div>
+    `;
+    const armAgainBtn = panelRun.querySelector("#armAgainBtn");
+    if (armAgainBtn) {
+      armAgainBtn.addEventListener("click", () => selectTab(tabPlan));
+    }
+    return;
+  }
+
   let title = "Watching";
   let subtitle = `${currentPlan?.subjects?.length || 0} subjects watching`;
 
@@ -324,7 +342,7 @@ function renderRunPanel() {
     subtitle = "Every subject holds its Wanted Section";
   } else if (state === "suspended") {
     title = "Suspended";
-    subtitle = "Session logged out — probe active";
+    subtitle = "You have to log back in, nothing else";
   } else if (state === "aborted") {
     title = "Aborted";
     subtitle = "Unrecognised page state";
@@ -730,6 +748,12 @@ async function load() {
         currentPlan.academicSessionId = catalogue.academicSessionId;
         await savePlan(currentPlan);
       }
+    }
+
+    if (vigilData?.state === "watching" || vigilData?.state === "armed" || vigilData?.state === "suspended" || vigilData?.state === "complete") {
+      selectTab(tabRun);
+    } else {
+      selectTab(tabPlan);
     }
 
     render();
