@@ -25,7 +25,7 @@
         "https://archershub.dlsu.edu.ph/Enlistment_V2/*",
         "https://archershub.dlsu.edu.ph/Enlistment/*"
       ],
-      "js": ["content/content.js"],
+      "js": ["dist/content.bundle.js"],
       "run_at": "document_end"
     }
   ]

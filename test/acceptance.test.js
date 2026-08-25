@@ -1960,6 +1960,46 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
       );
     });
   });
+
+  describe('Issue #32 Acceptance: Fix content script module loading in unpacked browser runtime', () => {
+    it('Criterion 1: content script source uses static import, no dynamic import()', () => {
+      const contentSource = fs.readFileSync(new URL('../content/content.js', import.meta.url), 'utf-8');
+      assert.equal(contentSource.includes('await import('), false,
+        'content.js must not use dynamic import()');
+      assert.equal(contentSource.includes('chrome.runtime.getURL'), false,
+        'content.js must not use chrome.runtime.getURL to load modules');
+      assert.ok(contentSource.includes("from './classifier.js'"),
+        'content.js must statically import classifier.js');
+    });
+
+    it('Criterion 2: manifest points content_scripts at the bundled output', () => {
+      const manifestRaw = fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf-8');
+      const manifest = JSON.parse(manifestRaw);
+      const contentJs = manifest.content_scripts[0].js;
+      assert.deepStrictEqual(contentJs, ['dist/content.bundle.js']);
+    });
+
+    it('Criterion 3: build script exists and produces dist/content.bundle.js', async () => {
+      const { existsSync } = await import('node:fs');
+      const { fileURLToPath } = await import('node:url');
+      const { dirname, join } = await import('node:path');
+      const root = dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
+      assert.ok(existsSync(join(root, 'scripts', 'build.js')),
+        'scripts/build.js must exist');
+      assert.ok(existsSync(join(root, 'dist', 'content.bundle.js')),
+        'dist/content.bundle.js must exist');
+    });
+
+    it('Criterion 4: PING, CLASSIFY_PAGE, EXECUTE_STRIKE are handled synchronously without async classifier loading', () => {
+      const contentSource = fs.readFileSync(new URL('../content/content.js', import.meta.url), 'utf-8');
+      // The old code used getClassifier().then(...) — verify it's gone
+      assert.equal(contentSource.includes('getClassifier'), false,
+        'content.js must not contain the old getClassifier() lazy-load pattern');
+      // Verify handleContentMessage is called directly
+      assert.ok(contentSource.includes('handleContentMessage(message'),
+        'content.js must call handleContentMessage directly');
+    });
+  });
 });
 
 

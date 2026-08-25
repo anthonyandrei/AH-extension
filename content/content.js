@@ -3,20 +3,9 @@
  * Classification and DOM interaction surface.
  */
 
-let classifierModule = null;
-let activeLoop = null;
+import { handleContentMessage } from './classifier.js';
 
-async function getClassifier() {
-  if (classifierModule) return classifierModule;
-  try {
-    const src = chrome.runtime.getURL('content/classifier.js');
-    classifierModule = await import(src);
-    return classifierModule;
-  } catch (err) {
-    console.error('Failed to import classifier module:', err);
-    return null;
-  }
-}
+let activeLoop = null;
 
 function getContentContext() {
   return {
@@ -38,19 +27,8 @@ function getContentContext() {
 // Runtime message listener for background worker / popup requests
 if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    getClassifier()
-      .then((mod) => {
-        if (!mod || !mod.handleContentMessage) {
-          sendResponse({ success: false, error: 'Classifier not initialized' });
-          return;
-        }
-        mod.handleContentMessage(message, sender, sendResponse, getContentContext());
-      })
-      .catch((err) => {
-        sendResponse({ success: false, error: err.message });
-      });
-
-    return true; // Asynchronous message response
+    handleContentMessage(message, sender, sendResponse, getContentContext());
+    return true;
   });
 }
 
@@ -60,9 +38,7 @@ async function checkAndAutoSteer() {
   try {
     const data = await chrome.storage.local.get(['vigil']);
     if (data?.vigil?.state === 'watching') {
-      const mod = await getClassifier();
-      if (!mod || !mod.handleContentMessage) return;
-      mod.handleContentMessage({ type: 'STEER_TAB' }, {}, () => {}, getContentContext());
+      handleContentMessage({ type: 'STEER_TAB' }, {}, () => {}, getContentContext());
     }
   } catch (_) {}
 }
