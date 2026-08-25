@@ -575,9 +575,10 @@ if (addBtn) {
 
 // Start Mode Segmented Control Handlers
 if (startNowBtn) {
-  startNowBtn.addEventListener("click", () => {
+  startNowBtn.addEventListener("click", async () => {
     startMode = "now";
     currentPlan.startMode = "now";
+    await savePlan(currentPlan);
     renderStartControl();
     renderArmButton();
     renderChecklist();
@@ -585,9 +586,10 @@ if (startNowBtn) {
 }
 
 if (startAtTimeBtn) {
-  startAtTimeBtn.addEventListener("click", () => {
+  startAtTimeBtn.addEventListener("click", async () => {
     startMode = "at-time";
     currentPlan.startMode = "at-time";
+    await savePlan(currentPlan);
     renderStartControl();
     renderArmButton();
     renderChecklist();
@@ -595,8 +597,9 @@ if (startAtTimeBtn) {
 }
 
 if (startTimeInput) {
-  startTimeInput.addEventListener("input", () => {
+  startTimeInput.addEventListener("input", async () => {
     currentPlan.startTime = startTimeInput.value;
+    await savePlan(currentPlan);
     renderArmButton();
   });
 }

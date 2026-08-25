@@ -12,11 +12,13 @@ import {
 
 describe('plan module', () => {
   describe('emptyPlan', () => {
-    it('returns a fresh empty plan object shaped { academicSessionId: null, subjects: [] }', () => {
+    it('returns a fresh empty plan object shaped { academicSessionId: null, subjects: [], startMode: "at-time", startTime: null }', () => {
       const plan = emptyPlan();
       assert.deepStrictEqual(plan, {
         academicSessionId: null,
         subjects: [],
+        startMode: 'at-time',
+        startTime: null,
       });
     });
 
@@ -30,10 +32,12 @@ describe('plan module', () => {
   });
 
   describe('addSubject', () => {
-    it('appends a new subject row derived from course and section objects', () => {
+    it('appends a new subject row derived from course and section objects and preserves default startMode and startTime', () => {
       const initialPlan = {
         academicSessionId: '2025-T1',
         subjects: [],
+        startMode: 'at-time',
+        startTime: null,
       };
       const course = {
         courseCreationId: 'c101',
@@ -56,10 +60,45 @@ describe('plan module', () => {
             sectionCode: 'S11',
           },
         ],
+        startMode: 'at-time',
+        startTime: null,
       });
     });
 
-    it('appends new subject to existing subjects maintaining order', () => {
+    it('preserves custom startMode and startTime when adding a subject', () => {
+      const initialPlan = {
+        academicSessionId: '2025-T1',
+        subjects: [],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
+      };
+      const course = {
+        courseCreationId: 'c101',
+        courseCode: 'CS101',
+      };
+      const section = {
+        sectionCreationId: 's101',
+        sectionCode: 'S11',
+      };
+
+      const updatedPlan = addSubject(initialPlan, course, section);
+
+      assert.deepStrictEqual(updatedPlan, {
+        academicSessionId: '2025-T1',
+        subjects: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CS101',
+            sectionCreationId: 's101',
+            sectionCode: 'S11',
+          },
+        ],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
+      });
+    });
+
+    it('appends new subject to existing subjects maintaining order and retaining start settings', () => {
       const initialPlan = {
         academicSessionId: '2025-T1',
         subjects: [
@@ -70,6 +109,8 @@ describe('plan module', () => {
             sectionCode: 'S11',
           },
         ],
+        startMode: 'at-time',
+        startTime: '2026-08-26T07:00:00.000Z',
       };
       const course2 = {
         courseCreationId: 'c102',
@@ -89,10 +130,17 @@ describe('plan module', () => {
         sectionCreationId: 's102',
         sectionCode: 'S12',
       });
+      assert.equal(updatedPlan.startMode, 'at-time');
+      assert.equal(updatedPlan.startTime, '2026-08-26T07:00:00.000Z');
     });
 
-    it('returns plan unchanged if courseCreationId already exists (no duplicates)', () => {
-      const initialPlan = emptyPlan();
+    it('returns plan with preserved startMode and startTime if courseCreationId already exists (no duplicates)', () => {
+      const initialPlan = {
+        academicSessionId: '2025-T1',
+        subjects: [],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
+      };
       const course = {
         courseCreationId: 'c101',
         courseCode: 'CS101',
@@ -118,6 +166,8 @@ describe('plan module', () => {
           sectionCode: 'S11',
         },
       ]);
+      assert.equal(planWithDuplicate.startMode, 'now');
+      assert.equal(planWithDuplicate.startTime, '2026-08-26T07:00:00.000Z');
     });
 
     it('does not mutate the original input plan argument', () => {
@@ -131,6 +181,8 @@ describe('plan module', () => {
             sectionCode: 'S10',
           },
         ],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
       };
       const pristineClone = structuredClone(originalPlan);
       const course = { courseCreationId: 'c101', courseCode: 'CS101' };
@@ -142,8 +194,8 @@ describe('plan module', () => {
       assert.notEqual(result, originalPlan);
     });
 
-    it('returns plan unchanged if course or section is invalid or missing IDs', () => {
-      const plan = { academicSessionId: '2025-T1', subjects: [] };
+    it('returns plan unchanged with startMode and startTime preserved if course or section is invalid or missing IDs', () => {
+      const plan = { academicSessionId: '2025-T1', subjects: [], startMode: 'now', startTime: '2026-08-26T07:00:00.000Z' };
       assert.deepStrictEqual(addSubject(plan, null, { sectionCreationId: 's1', sectionCode: 'S1' }), plan);
       assert.deepStrictEqual(addSubject(plan, { courseCode: 'C1' }, { sectionCreationId: 's1', sectionCode: 'S1' }), plan);
       assert.deepStrictEqual(addSubject(plan, { courseCreationId: 'c1', courseCode: 'C1' }, null), plan);
@@ -153,7 +205,7 @@ describe('plan module', () => {
   });
 
   describe('removeSubject', () => {
-    it('returns a new plan with only that row removed and other rows untouched', () => {
+    it('returns a new plan with only that row removed, other rows untouched, and default startMode and startTime', () => {
       const initialPlan = {
         academicSessionId: '2025-T1',
         subjects: [
@@ -176,6 +228,8 @@ describe('plan module', () => {
             sectionCode: 'S13',
           },
         ],
+        startMode: 'at-time',
+        startTime: null,
       };
 
       const updatedPlan = removeSubject(initialPlan, 'c102');
@@ -196,10 +250,50 @@ describe('plan module', () => {
             sectionCode: 'S13',
           },
         ],
+        startMode: 'at-time',
+        startTime: null,
       });
     });
 
-    it('returns a plan with identical subjects if courseCreationId is not found', () => {
+    it('preserves custom startMode and startTime when removing a subject', () => {
+      const initialPlan = {
+        academicSessionId: '2025-T1',
+        subjects: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CS101',
+            sectionCreationId: 's101',
+            sectionCode: 'S11',
+          },
+          {
+            courseCreationId: 'c102',
+            courseCode: 'CS102',
+            sectionCreationId: 's102',
+            sectionCode: 'S12',
+          },
+        ],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
+      };
+
+      const updatedPlan = removeSubject(initialPlan, 'c101');
+
+      assert.deepStrictEqual(updatedPlan, {
+        academicSessionId: '2025-T1',
+        subjects: [
+          {
+            courseCreationId: 'c102',
+            courseCode: 'CS102',
+            sectionCreationId: 's102',
+            sectionCode: 'S12',
+          },
+        ],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
+      });
+    });
+
+    it('returns a plan with identical subjects, startMode, and startTime if courseCreationId is not found', () => {
       const initialPlan = {
         academicSessionId: '2025-T1',
         subjects: [
@@ -210,10 +304,14 @@ describe('plan module', () => {
             sectionCode: 'S11',
           },
         ],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
       };
 
       const updatedPlan = removeSubject(initialPlan, 'c999');
       assert.deepStrictEqual(updatedPlan.subjects, initialPlan.subjects);
+      assert.equal(updatedPlan.startMode, 'now');
+      assert.equal(updatedPlan.startTime, '2026-08-26T07:00:00.000Z');
     });
 
     it('does not mutate the original input plan argument', () => {
@@ -233,6 +331,8 @@ describe('plan module', () => {
             sectionCode: 'S12',
           },
         ],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
       };
       const pristineClone = structuredClone(originalPlan);
 
@@ -244,7 +344,7 @@ describe('plan module', () => {
   });
 
   describe('setWantedSection', () => {
-    it('returns a new plan where only the matching row has its section replaced', () => {
+    it('returns a new plan where only the matching row has its section replaced and default startMode and startTime are preserved', () => {
       const initialPlan = {
         academicSessionId: '2025-T1',
         subjects: [
@@ -261,6 +361,8 @@ describe('plan module', () => {
             sectionCode: 'S12',
           },
         ],
+        startMode: 'at-time',
+        startTime: null,
       };
       const newSection = {
         sectionCreationId: 's999',
@@ -285,7 +387,71 @@ describe('plan module', () => {
             sectionCode: 'S12',
           },
         ],
+        startMode: 'at-time',
+        startTime: null,
       });
+    });
+
+    it('preserves custom startMode and startTime when setting a wanted section', () => {
+      const initialPlan = {
+        academicSessionId: '2025-T1',
+        subjects: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CS101',
+            sectionCreationId: 's101',
+            sectionCode: 'S11',
+          },
+        ],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
+      };
+      const newSection = {
+        sectionCreationId: 's200',
+        sectionCode: 'S20',
+      };
+
+      const updatedPlan = setWantedSection(initialPlan, 'c101', newSection);
+
+      assert.deepStrictEqual(updatedPlan, {
+        academicSessionId: '2025-T1',
+        subjects: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CS101',
+            sectionCreationId: 's200',
+            sectionCode: 'S20',
+          },
+        ],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
+      });
+    });
+
+    it('preserves startMode and startTime when courseCreationId is not found in setWantedSection', () => {
+      const initialPlan = {
+        academicSessionId: '2025-T1',
+        subjects: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CS101',
+            sectionCreationId: 's101',
+            sectionCode: 'S11',
+          },
+        ],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
+      };
+      const newSection = {
+        sectionCreationId: 's200',
+        sectionCode: 'S20',
+      };
+
+      const updatedPlan = setWantedSection(initialPlan, 'c999', newSection);
+
+      assert.deepStrictEqual(updatedPlan.subjects, initialPlan.subjects);
+      assert.equal(updatedPlan.startMode, 'now');
+      assert.equal(updatedPlan.startTime, '2026-08-26T07:00:00.000Z');
     });
 
     it('does not mutate the original input plan argument', () => {
@@ -299,6 +465,8 @@ describe('plan module', () => {
             sectionCode: 'S11',
           },
         ],
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
       };
       const pristineClone = structuredClone(originalPlan);
       const newSection = {

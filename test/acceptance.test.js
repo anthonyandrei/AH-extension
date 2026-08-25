@@ -59,6 +59,10 @@ import {
 } from '../popup/reporting.js';
 
 import {
+  emptyPlan,
+  addSubject,
+  removeSubject,
+  setWantedSection,
   renderPlanRows,
 } from '../popup/plan.js';
 
@@ -1373,6 +1377,75 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
       assert.ok(lostEntry, 'Lost slot must be detected and logged to ledger on subsequent pass');
       assert.equal(lostEntry.tier, 'notice');
       assert.match(lostEntry.cause, /CSARCH1/);
+    });
+  });
+
+  describe('Issue #27 Acceptance: Preserve start mode and start time across Plan mutations', () => {
+    it('empty plan carries default start mode and time, and adding/removing subjects and setting wanted sections preserves both through to arming', async () => {
+      // 1. Acceptance criterion 1: An empty Plan carries default start-mode and start-time fields.
+      const initialPlan = emptyPlan();
+      assert.equal(initialPlan.startMode, 'at-time');
+      assert.equal(initialPlan.startTime, null);
+      assert.deepEqual(initialPlan.subjects, []);
+
+      // 2. User chooses start mode and start time
+      let plan = {
+        ...initialPlan,
+        startMode: 'now',
+        startTime: '2026-08-26T07:00:00.000Z',
+      };
+
+      // 3. Acceptance criterion 2: Adding a subject preserves startMode and startTime
+      const course1 = { courseCreationId: 101, courseCode: 'CSARCH1' };
+      const section1 = { sectionCreationId: 501, sectionCode: 'S11' };
+      plan = addSubject(plan, course1, section1);
+      assert.equal(plan.startMode, 'now');
+      assert.equal(plan.startTime, '2026-08-26T07:00:00.000Z');
+      assert.equal(plan.subjects.length, 1);
+
+      const course2 = { courseCreationId: 102, courseCode: 'CSNETWK' };
+      const section2 = { sectionCreationId: 502, sectionCode: 'S12' };
+      plan = addSubject(plan, course2, section2);
+      assert.equal(plan.startMode, 'now');
+      assert.equal(plan.startTime, '2026-08-26T07:00:00.000Z');
+      assert.equal(plan.subjects.length, 2);
+
+      // 4. Acceptance criterion 2: Setting a Wanted Section preserves startMode and startTime
+      const newSection1 = { sectionCreationId: 503, sectionCode: 'S13' };
+      plan = setWantedSection(plan, 101, newSection1);
+      assert.equal(plan.startMode, 'now');
+      assert.equal(plan.startTime, '2026-08-26T07:00:00.000Z');
+      assert.equal(plan.subjects[0].sectionCreationId, 503);
+      assert.equal(plan.subjects[0].sectionCode, 'S13');
+
+      // 5. Acceptance criterion 2: Removing a subject preserves startMode and startTime
+      plan = removeSubject(plan, 102);
+      assert.equal(plan.startMode, 'now');
+      assert.equal(plan.startTime, '2026-08-26T07:00:00.000Z');
+      assert.equal(plan.subjects.length, 1);
+      assert.equal(plan.subjects[0].courseCreationId, 101);
+
+      // 6. Arming receives the preserved plan and start configurations
+      const storage = createMockStorage();
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const now = 1756180000000;
+
+      const armResult = await armVigil({
+        plan,
+        startMode: plan.startMode,
+        startTime: plan.startTime,
+        catalogue: { loggedIn: true },
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        now,
+      });
+
+      assert.equal(armResult.success, true);
+      assert.equal(armResult.state, 'watching');
+      assert.equal(storage._getStore().vigil.state, 'watching');
+      assert.equal(storage._getStore().plan.startMode, 'now');
     });
   });
 });

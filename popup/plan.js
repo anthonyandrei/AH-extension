@@ -5,26 +5,30 @@ function idEquals(a, b) {
 /**
  * Returns a fresh empty Plan object.
  *
- * @returns {{ academicSessionId: string|null, subjects: Array }}
+ * @returns {{ academicSessionId: string|null, subjects: Array, startMode: string, startTime: string|null }}
  */
 export function emptyPlan() {
   return {
     academicSessionId: null,
     subjects: [],
+    startMode: 'at-time',
+    startTime: null,
   };
 }
 
 /**
  * Appends a new subject row to the plan if not already present.
  *
- * @param {{ academicSessionId?: string|null, subjects?: Array }} plan
+ * @param {{ academicSessionId?: string|null, subjects?: Array, startMode?: string, startTime?: string|null }} plan
  * @param {{ courseCreationId: string|number, courseCode: string }} course
  * @param {{ sectionCreationId: string|number, sectionCode: string }} section
- * @returns {{ academicSessionId: string|null, subjects: Array }}
+ * @returns {{ academicSessionId: string|null, subjects: Array, startMode: string, startTime: string|null }}
  */
 export function addSubject(plan, course, section) {
   const currentPlan = plan || emptyPlan();
   const subjects = Array.isArray(currentPlan.subjects) ? currentPlan.subjects : [];
+  const startMode = currentPlan.startMode !== undefined ? currentPlan.startMode : 'at-time';
+  const startTime = currentPlan.startTime !== undefined ? currentPlan.startTime : null;
 
   if (
     !course ||
@@ -37,6 +41,8 @@ export function addSubject(plan, course, section) {
     return {
       academicSessionId: currentPlan.academicSessionId ?? null,
       subjects: [...subjects],
+      startMode,
+      startTime,
     };
   }
 
@@ -46,6 +52,8 @@ export function addSubject(plan, course, section) {
     return {
       academicSessionId: currentPlan.academicSessionId ?? null,
       subjects: [...subjects],
+      startMode,
+      startTime,
     };
   }
 
@@ -59,37 +67,45 @@ export function addSubject(plan, course, section) {
   return {
     academicSessionId: currentPlan.academicSessionId ?? null,
     subjects: [...subjects, newSubject],
+    startMode,
+    startTime,
   };
 }
 
 /**
  * Returns a new plan with the specified subject removed.
  *
- * @param {{ academicSessionId?: string|null, subjects?: Array }} plan
+ * @param {{ academicSessionId?: string|null, subjects?: Array, startMode?: string, startTime?: string|null }} plan
  * @param {string|number} courseCreationId
- * @returns {{ academicSessionId: string|null, subjects: Array }}
+ * @returns {{ academicSessionId: string|null, subjects: Array, startMode: string, startTime: string|null }}
  */
 export function removeSubject(plan, courseCreationId) {
   const currentPlan = plan || emptyPlan();
   const subjects = Array.isArray(currentPlan.subjects) ? currentPlan.subjects : [];
+  const startMode = currentPlan.startMode !== undefined ? currentPlan.startMode : 'at-time';
+  const startTime = currentPlan.startTime !== undefined ? currentPlan.startTime : null;
 
   return {
     academicSessionId: currentPlan.academicSessionId ?? null,
     subjects: subjects.filter((s) => !idEquals(s.courseCreationId, courseCreationId)),
+    startMode,
+    startTime,
   };
 }
 
 /**
  * Returns a new plan with the Wanted Section replaced for the matching subject row.
  *
- * @param {{ academicSessionId?: string|null, subjects?: Array }} plan
+ * @param {{ academicSessionId?: string|null, subjects?: Array, startMode?: string, startTime?: string|null }} plan
  * @param {string|number} courseCreationId
  * @param {{ sectionCreationId: string|number, sectionCode: string }} section
- * @returns {{ academicSessionId: string|null, subjects: Array }}
+ * @returns {{ academicSessionId: string|null, subjects: Array, startMode: string, startTime: string|null }}
  */
 export function setWantedSection(plan, courseCreationId, section) {
   const currentPlan = plan || emptyPlan();
   const subjects = Array.isArray(currentPlan.subjects) ? currentPlan.subjects : [];
+  const startMode = currentPlan.startMode !== undefined ? currentPlan.startMode : 'at-time';
+  const startTime = currentPlan.startTime !== undefined ? currentPlan.startTime : null;
 
   return {
     academicSessionId: currentPlan.academicSessionId ?? null,
@@ -103,6 +119,8 @@ export function setWantedSection(plan, courseCreationId, section) {
       }
       return { ...s };
     }),
+    startMode,
+    startTime,
   };
 }
 
