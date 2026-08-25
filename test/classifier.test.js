@@ -10,6 +10,7 @@ import {
   handleContentMessage,
   executeStateAction,
   findCourseRow,
+  getCourseRowControls,
   evaluateSaveGate,
   applyDispositionsToDom,
   executeStrike,
@@ -935,6 +936,24 @@ describe('classifier module', () => {
       assert.equal(findCourseRow(tbl, null, 'CS101'), row1);
       assert.equal(findCourseRow(tbl, 202), row2);
       assert.equal(findCourseRow(tbl, 999, 'UNKNOWN'), null);
+    });
+  });
+
+  describe('getCourseRowControls', () => {
+    it('returns empty controls when row is null or undefined', () => {
+      assert.deepEqual(getCourseRowControls(null), { checkbox: null, dropdown: null, selectedValue: '' });
+      assert.deepEqual(getCourseRowControls(undefined), { checkbox: null, dropdown: null, selectedValue: '' });
+    });
+
+    it('extracts checkbox, dropdown, and selectedValue from course row', () => {
+      const chk = createMockElement({ tagName: 'input', type: 'checkbox', checked: true });
+      const ddl = createMockElement({ tagName: 'select', classList: ['ddlSection'], value: '501' });
+      const row = createMockElement({ tagName: 'tr', children: [chk, ddl] });
+
+      const controls = getCourseRowControls(row);
+      assert.equal(controls.checkbox, chk);
+      assert.equal(controls.dropdown, ddl);
+      assert.equal(controls.selectedValue, '501');
     });
   });
 

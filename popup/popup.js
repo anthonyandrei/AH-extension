@@ -11,40 +11,42 @@ import {
 import { filterLedgerEntries, formatEventTime, exportPassTail } from "./reporting.js";
 import { stopVigil } from "./pass.js";
 
-// DOM Elements
-const tabPlan = document.getElementById("tabPlan");
-const tabRun = document.getElementById("tabRun");
-const tabReport = document.getElementById("tabReport");
+// DOM Elements helper
+const getEl = (id) => (typeof document !== "undefined" ? document.getElementById(id) : null);
 
-const panelPlan = document.getElementById("panelPlan");
-const panelRun = document.getElementById("panelRun");
-const panelReport = document.getElementById("panelReport");
+const tabPlan = getEl("tabPlan");
+const tabRun = getEl("tabRun");
+const tabReport = getEl("tabReport");
 
-const vigilChip = document.getElementById("vigilChip");
-const vigilChipLabel = document.getElementById("vigilChipLabel");
+const panelPlan = getEl("panelPlan");
+const panelRun = getEl("panelRun");
+const panelReport = getEl("panelReport");
 
-const planRows = document.getElementById("planRows");
-const addCourse = document.getElementById("addCourse");
-const addBtn = document.getElementById("addBtn");
-const planRefusal = document.getElementById("planRefusal");
+const vigilChip = getEl("vigilChip");
+const vigilChipLabel = getEl("vigilChipLabel");
 
-const startNowBtn = document.getElementById("startNowBtn");
-const startAtTimeBtn = document.getElementById("startAtTimeBtn");
-const startTimeInput = document.getElementById("startTimeInput");
-const startNowDescription = document.getElementById("startNowDescription");
-const armBtn = document.getElementById("armBtn");
+const planRows = getEl("planRows");
+const addCourse = getEl("addCourse");
+const addBtn = getEl("addBtn");
+const planRefusal = getEl("planRefusal");
 
-const checklistDetails = document.getElementById("checklistDetails");
-const checklistSummary = document.getElementById("checklistSummary");
-const checklistItems = document.getElementById("checklistItems");
+const startNowBtn = getEl("startNowBtn");
+const startAtTimeBtn = getEl("startAtTimeBtn");
+const startTimeInput = getEl("startTimeInput");
+const startNowDescription = getEl("startNowDescription");
+const armBtn = getEl("armBtn");
 
-const planStatus = document.getElementById("planStatus");
+const checklistDetails = getEl("checklistDetails");
+const checklistSummary = getEl("checklistSummary");
+const checklistItems = getEl("checklistItems");
 
-const filterAll = document.getElementById("filterAll");
-const filterAlerts = document.getElementById("filterAlerts");
-const filterNotices = document.getElementById("filterNotices");
-const exportBtn = document.getElementById("exportBtn");
-const reportList = document.getElementById("reportList");
+const planStatus = getEl("planStatus");
+
+const filterAll = getEl("filterAll");
+const filterAlerts = getEl("filterAlerts");
+const filterNotices = getEl("filterNotices");
+const exportBtn = getEl("exportBtn");
+const reportList = getEl("reportList");
 
 // State
 let currentPlan = emptyPlan();
@@ -140,33 +142,133 @@ function setupTabs() {
   }
 }
 
+// URL / Navigation helpers
+export function openExternalUrl(url) {
+  if (typeof chrome !== "undefined" && chrome?.tabs?.create) {
+    chrome.tabs.create({ url });
+  } else if (typeof window !== "undefined" && window.open) {
+    window.open(url, "_blank");
+  }
+}
+
+/**
+ * Consolidates presentation descriptors (tones, labels, titles, subtitles, stop visibility) for Vigil states.
+ *
+ * @param {{ vigil?: object|null, plan?: object|null, reconciliation?: object|null }} [params]
+ * @returns {{
+ *   state: string,
+ *   isRunning: boolean,
+ *   isRunTabState: boolean,
+ *   chipVisible: boolean,
+ *   chipTone: string|null,
+ *   chipLabel: string|null,
+ *   runTitle: string,
+ *   runSubtitle: string,
+ *   showStopButton: boolean,
+ *   isSuspended: boolean
+ * }}
+ */
+export function getVigilPresentation({ vigil, plan, reconciliation } = {}) {
+  const state = vigil?.state || "none";
+  const isRunning = state === "watching" || state === "armed";
+  const isRunTabState = ["watching", "armed", "suspended", "complete", "stall", "aborted"].includes(state);
+  const subjectCount = plan?.subjects?.length || 0;
+
+  let chipVisible = false;
+  let chipTone = null;
+  let chipLabel = null;
+  let title = "Watching";
+  let subtitle = `${subjectCount} subjects watching`;
+  let showStopButton = false;
+  let isSuspended = false;
+
+  switch (state) {
+    case "armed":
+      chipVisible = true;
+      chipTone = "armed";
+      chipLabel = `starts ${formatDateTimeDisplay(vigil?.nextFireTime)}`;
+      title = `Armed for ${formatDateTimeDisplay(vigil?.nextFireTime)}`;
+      subtitle = "Armed. Pre-start keepalive active.";
+      showStopButton = true;
+      break;
+    case "watching":
+      chipVisible = true;
+      chipTone = "live";
+      chipLabel = "watching";
+      if (reconciliation) {
+        const satisfiedCount = (reconciliation.dispositions || []).filter(
+          (d) => d.isSatisfied && d.wantedSectionCode !== null
+        ).length;
+        subtitle = `${reconciliation.unresolvedCount} watching, ${satisfiedCount} satisfied`;
+      }
+      showStopButton = true;
+      break;
+    case "suspended":
+      chipVisible = true;
+      chipTone = "warn";
+      chipLabel = "suspended";
+      title = "Suspended";
+      subtitle = "You have to log back in, nothing else";
+      showStopButton = true;
+      isSuspended = true;
+      break;
+    case "stall":
+      chipVisible = true;
+      chipTone = "bad";
+      chipLabel = "stall";
+      title = "Stall";
+      subtitle = "10 minutes without a complete pass";
+      showStopButton = true;
+      break;
+    case "aborted":
+      chipVisible = true;
+      chipTone = "bad";
+      chipLabel = "aborted";
+      title = "Aborted";
+      subtitle = "Unrecognised page state";
+      break;
+    case "complete":
+      chipVisible = true;
+      chipTone = "done";
+      chipLabel = "complete";
+      title = "Complete";
+      subtitle = "Every subject holds its Wanted Section";
+      break;
+    case "stopped":
+    case "none":
+    default:
+      break;
+  }
+
+  return {
+    state,
+    isRunning,
+    isRunTabState,
+    chipVisible,
+    chipTone,
+    chipLabel,
+    runTitle: title,
+    runSubtitle: subtitle,
+    title,
+    subtitle,
+    showStopButton,
+    isSuspended,
+  };
+}
+
 // Render Functions
 function renderChip() {
   if (!vigilChip || !vigilChipLabel) return;
 
-  const state = vigilData?.state;
-  if (!state || state === "none" || state === "stopped") {
+  const presentation = getVigilPresentation({ vigil: vigilData, plan: currentPlan, reconciliation: reconciliationData });
+  if (!presentation.chipVisible) {
     vigilChip.hidden = true;
     return;
   }
 
   vigilChip.hidden = false;
-  if (state === "armed") {
-    vigilChip.dataset.tone = "armed";
-    vigilChipLabel.textContent = `starts ${formatDateTimeDisplay(vigilData.nextFireTime)}`;
-  } else if (state === "watching") {
-    vigilChip.dataset.tone = "live";
-    vigilChipLabel.textContent = "watching";
-  } else if (state === "suspended") {
-    vigilChip.dataset.tone = "warn";
-    vigilChipLabel.textContent = "suspended";
-  } else if (state === "stall" || state === "aborted") {
-    vigilChip.dataset.tone = "bad";
-    vigilChipLabel.textContent = state;
-  } else if (state === "complete") {
-    vigilChip.dataset.tone = "done";
-    vigilChipLabel.textContent = "complete";
-  }
+  vigilChip.dataset.tone = presentation.chipTone;
+  vigilChipLabel.textContent = presentation.chipLabel;
 }
 
 function renderChecklist() {
@@ -229,11 +331,7 @@ function renderRefusal() {
     openBtn.style.padding = "6px 10px";
     openBtn.textContent = "Open ArchersHub";
     openBtn.addEventListener("click", () => {
-      if (typeof chrome !== "undefined" && chrome?.tabs?.create) {
-        chrome.tabs.create({ url: "https://archershub.dlsu.edu.ph/Enlistment_V2/Index" });
-      } else {
-        window.open("https://archershub.dlsu.edu.ph/Enlistment_V2/Index", "_blank");
-      }
+      openExternalUrl("https://archershub.dlsu.edu.ph/Enlistment_V2/Index");
     });
     btnWrap.appendChild(openBtn);
     note.appendChild(btnWrap);
@@ -263,19 +361,19 @@ function renderArmButton() {
   if (!armBtn) return;
 
   const isBlocked = isRefused || catalogueData?.loggedIn === false;
-  const isRunning = vigilData?.state === "watching" || vigilData?.state === "armed";
+  const presentation = getVigilPresentation({ vigil: vigilData, plan: currentPlan, reconciliation: reconciliationData });
   const subjectCount = currentPlan?.subjects?.length || 0;
 
   const label = formatArmLabel({
     startMode,
     startTime: startTimeInput?.value,
     isBlocked,
-    isRunning,
+    isRunning: presentation.isRunning,
     subjectCount,
   });
 
   armBtn.textContent = label;
-  armBtn.disabled = isBlocked || isRunning || subjectCount === 0;
+  armBtn.disabled = isBlocked || presentation.isRunning || subjectCount === 0;
 }
 
 function populateAddCourse() {
@@ -324,32 +422,7 @@ function renderRunPanel() {
     return;
   }
 
-  let title = "Watching";
-  let subtitle = `${currentPlan?.subjects?.length || 0} subjects watching`;
-
-  if (state === "armed") {
-    title = `Armed for ${formatDateTimeDisplay(vigilData.nextFireTime)}`;
-    subtitle = "Armed. Pre-start keepalive active.";
-  } else if (state === "watching") {
-    if (reconciliationData) {
-      const satisfiedCount = (reconciliationData.dispositions || []).filter(
-        (d) => d.isSatisfied && d.wantedSectionCode !== null
-      ).length;
-      subtitle = `${reconciliationData.unresolvedCount} watching, ${satisfiedCount} satisfied`;
-    }
-  } else if (state === "complete") {
-    title = "Complete";
-    subtitle = "Every subject holds its Wanted Section";
-  } else if (state === "suspended") {
-    title = "Suspended";
-    subtitle = "You have to log back in, nothing else";
-  } else if (state === "aborted") {
-    title = "Aborted";
-    subtitle = "Unrecognised page state";
-  } else if (state === "stall") {
-    title = "Stall";
-    subtitle = "10 minutes without a complete pass";
-  }
+  const presentation = getVigilPresentation({ vigil: vigilData, plan: currentPlan, reconciliation: reconciliationData });
 
   const subjectsHtml = (currentPlan?.subjects || [])
     .map((s) => {
@@ -372,8 +445,7 @@ function renderRunPanel() {
     })
     .join("");
 
-  const showStopButton = state === "watching" || state === "armed" || state === "suspended" || state === "stall";
-  const stopButtonHtml = showStopButton
+  const stopButtonHtml = presentation.showStopButton
     ? `<div style="margin-top: 16px;">
         <button type="button" id="stopVigilBtn" class="btn ${isStopConfirming ? 'btn-danger' : 'btn-ghost'} btn-block">
           ${isStopConfirming ? 'Stop Vigil? Click again to confirm' : 'Stop Vigil'}
@@ -381,7 +453,7 @@ function renderRunPanel() {
       </div>`
     : "";
 
-  const warnHtml = state === "suspended"
+  const warnHtml = presentation.isSuspended
     ? `<div class="note" data-tone="warn" style="margin-top: 8px; margin-bottom: 10px;">
         <b class="note-t">Session lost</b>
         <div>The Vigil is suspended and checking every 30s. Log back in to ArchersHub in any tab and the Vigil will resume on its own.</div>
@@ -393,8 +465,8 @@ function renderRunPanel() {
 
   panelRun.innerHTML = `
     <div style="padding: 12px 0 10px;">
-      <p style="font-size: 14px; font-weight: 600; letter-spacing: -0.01em;">${title}</p>
-      <p class="muted" style="font-size: 11.5px; margin-top: 2px;">${subtitle}</p>
+      <p style="font-size: 14px; font-weight: 600; letter-spacing: -0.01em;">${presentation.runTitle}</p>
+      <p class="muted" style="font-size: 11.5px; margin-top: 2px;">${presentation.runSubtitle}</p>
     </div>
     ${warnHtml}
     <div class="sec-h" style="margin-top: 4px;"><span>Subjects</span></div>
@@ -405,11 +477,7 @@ function renderRunPanel() {
   const openArchersHubRunBtn = panelRun.querySelector("#openArchersHubRunBtn");
   if (openArchersHubRunBtn) {
     openArchersHubRunBtn.addEventListener("click", () => {
-      if (typeof chrome !== "undefined" && chrome?.tabs?.create) {
-        chrome.tabs.create({ url: "https://archershub.dlsu.edu.ph/" });
-      } else {
-        window.open("https://archershub.dlsu.edu.ph/", "_blank");
-      }
+      openExternalUrl("https://archershub.dlsu.edu.ph/");
     });
   }
 
@@ -693,7 +761,8 @@ async function load() {
       }
     }
 
-    if (vigilData?.state === "watching" || vigilData?.state === "armed" || vigilData?.state === "suspended" || vigilData?.state === "complete" || vigilData?.state === "stall" || vigilData?.state === "aborted") {
+    const presentation = getVigilPresentation({ vigil: vigilData, plan: currentPlan, reconciliation: reconciliationData });
+    if (presentation.isRunTabState) {
       selectTab(tabRun);
     } else {
       selectTab(tabPlan);
@@ -721,5 +790,7 @@ if (typeof chrome !== "undefined" && chrome?.storage?.onChanged) {
 }
 
 // Initialize on load
-setupTabs();
-load();
+if (typeof document !== "undefined") {
+  setupTabs();
+  load();
+}

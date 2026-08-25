@@ -77,6 +77,22 @@ export function findCourseRow(tbl, courseCreationId, courseCode = '') {
 }
 
 /**
+ * Extracts form controls (checkbox, select dropdown, and selected value) from a course table row.
+ *
+ * @param {Element|null} row
+ * @returns {{ checkbox: Element|null, dropdown: Element|null, selectedValue: string }}
+ */
+export function getCourseRowControls(row) {
+  if (!row) {
+    return { checkbox: null, dropdown: null, selectedValue: '' };
+  }
+  const checkbox = row.querySelector ? (row.querySelector('input[type="checkbox"]') || row.querySelector('input')) : null;
+  const dropdown = row.querySelector ? (row.querySelector('select') || row.querySelector('.ddlSection')) : null;
+  const selectedValue = dropdown ? (dropdown.value !== undefined ? String(dropdown.value).trim() : '') : '';
+  return { checkbox, dropdown, selectedValue };
+}
+
+/**
  * Evaluates Save Gate conditions per SPEC §8 before clicking #btnEnlistment.
  * Condition 1: Every course HTTP read says is held is present as a row, still checked, carrying a non-null section id.
  * Condition 2: Every subject being acted on carries the section id intended for it and is checked.
@@ -123,7 +139,7 @@ export function evaluateSaveGate(options = {}) {
       };
     }
 
-    const chk = row.querySelector ? (row.querySelector('input[type="checkbox"]') || row.querySelector('input')) : null;
+    const { checkbox: chk, dropdown: ddl, selectedValue: val } = getCourseRowControls(row);
     if (!chk || !chk.checked) {
       return {
         approved: false,
@@ -131,8 +147,6 @@ export function evaluateSaveGate(options = {}) {
       };
     }
 
-    const ddl = row.querySelector ? (row.querySelector('select') || row.querySelector('.ddlSection')) : null;
-    const val = ddl ? (ddl.value !== undefined ? String(ddl.value).trim() : '') : '';
     if (!ddl || !val || val === '0' || val === '-1' || val === 'null' || val === 'undefined') {
       return {
         approved: false,
@@ -154,7 +168,7 @@ export function evaluateSaveGate(options = {}) {
       };
     }
 
-    const chk = row.querySelector ? (row.querySelector('input[type="checkbox"]') || row.querySelector('input')) : null;
+    const { checkbox: chk, dropdown: ddl, selectedValue: val } = getCourseRowControls(row);
     if (!chk || !chk.checked) {
       return {
         approved: false,
@@ -162,8 +176,6 @@ export function evaluateSaveGate(options = {}) {
       };
     }
 
-    const ddl = row.querySelector ? (row.querySelector('select') || row.querySelector('.ddlSection')) : null;
-    const val = ddl ? (ddl.value !== undefined ? String(ddl.value).trim() : '') : '';
     const intendedId = String(act.wantedSectionCreationId ?? '').trim();
     if (!ddl || !val || val !== intendedId) {
       return {
@@ -202,8 +214,9 @@ export function applyDispositionsToDom(options = {}) {
       const row = findCourseRow(tbl, disp.courseCreationId, disp.courseCode);
       if (!row) continue;
 
+      const { checkbox: chk, dropdown: ddl } = getCourseRowControls(row);
+
       // 1. Tick the row (never un-tick!)
-      const chk = row.querySelector ? (row.querySelector('input[type="checkbox"]') || row.querySelector('input')) : null;
       if (chk) {
         if (!chk.checked) {
           chk.checked = true;
@@ -217,7 +230,6 @@ export function applyDispositionsToDom(options = {}) {
       }
 
       // 2. Select the Wanted Section in dropdown
-      const ddl = row.querySelector ? (row.querySelector('select') || row.querySelector('.ddlSection')) : null;
       if (ddl) {
         const wantedIdStr = String(disp.wantedSectionCreationId);
         const wantedCode = (disp.wantedSectionCode || '').trim().toUpperCase();

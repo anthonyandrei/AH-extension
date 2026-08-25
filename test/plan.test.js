@@ -9,6 +9,7 @@ import {
   computeAvailabilityText,
   renderPlanRows,
 } from '../popup/plan.js';
+import { getVigilPresentation, openExternalUrl } from '../popup/popup.js';
 
 describe('plan module', () => {
   describe('emptyPlan', () => {
@@ -1047,6 +1048,96 @@ describe('plan module', () => {
       assert.ok(changedPlan);
       assert.equal(changedPlan.subjects[0].sectionCreationId, 's_zero');
       assert.equal(changedPlan.subjects[0].sectionCode, 'S11');
+    });
+  });
+
+  describe('getVigilPresentation', () => {
+    it('returns default presentation when vigil is null or none', () => {
+      const res = getVigilPresentation();
+      assert.equal(res.state, 'none');
+      assert.equal(res.isRunning, false);
+      assert.equal(res.chipVisible, false);
+      assert.equal(res.showStopButton, false);
+    });
+
+    it('returns armed presentation with start time', () => {
+      const date = new Date('2026-08-26T07:00:00Z').getTime();
+      const res = getVigilPresentation({ vigil: { state: 'armed', nextFireTime: date } });
+      assert.equal(res.state, 'armed');
+      assert.equal(res.isRunning, true);
+      assert.equal(res.chipVisible, true);
+      assert.equal(res.chipTone, 'armed');
+      assert.ok(res.chipLabel.startsWith('starts '));
+      assert.ok(res.runTitle.startsWith('Armed for '));
+      assert.equal(res.showStopButton, true);
+      assert.equal(res.isRunTabState, true);
+    });
+
+    it('returns watching presentation with reconciliation counts', () => {
+      const res = getVigilPresentation({
+        vigil: { state: 'watching' },
+        plan: { subjects: [{ courseCode: 'CS101' }, { courseCode: 'CS102' }] },
+        reconciliation: {
+          unresolvedCount: 1,
+          dispositions: [
+            { isSatisfied: true, wantedSectionCode: 'S11' },
+            { isSatisfied: false, wantedSectionCode: 'S12' },
+          ],
+        },
+      });
+      assert.equal(res.state, 'watching');
+      assert.equal(res.isRunning, true);
+      assert.equal(res.chipTone, 'live');
+      assert.equal(res.chipLabel, 'watching');
+      assert.equal(res.runSubtitle, '1 watching, 1 satisfied');
+      assert.equal(res.showStopButton, true);
+    });
+
+    it('returns suspended presentation with warning tone', () => {
+      const res = getVigilPresentation({ vigil: { state: 'suspended' } });
+      assert.equal(res.state, 'suspended');
+      assert.equal(res.chipTone, 'warn');
+      assert.equal(res.chipLabel, 'suspended');
+      assert.equal(res.runTitle, 'Suspended');
+      assert.equal(res.isSuspended, true);
+      assert.equal(res.showStopButton, true);
+    });
+
+    it('returns complete presentation with done tone', () => {
+      const res = getVigilPresentation({ vigil: { state: 'complete' } });
+      assert.equal(res.state, 'complete');
+      assert.equal(res.chipTone, 'done');
+      assert.equal(res.chipLabel, 'complete');
+      assert.equal(res.runTitle, 'Complete');
+      assert.equal(res.showStopButton, false);
+    });
+
+    it('returns stall and aborted presentations with bad tone', () => {
+      const stall = getVigilPresentation({ vigil: { state: 'stall' } });
+      assert.equal(stall.chipTone, 'bad');
+      assert.equal(stall.chipLabel, 'stall');
+      assert.equal(stall.runTitle, 'Stall');
+
+      const aborted = getVigilPresentation({ vigil: { state: 'aborted' } });
+      assert.equal(aborted.chipTone, 'bad');
+      assert.equal(aborted.chipLabel, 'aborted');
+      assert.equal(aborted.runTitle, 'Aborted');
+    });
+  });
+
+  describe('openExternalUrl', () => {
+    it('calls chrome.tabs.create if chrome API is available', () => {
+      let createdUrl = null;
+      globalThis.chrome = {
+        tabs: {
+          create: ({ url }) => {
+            createdUrl = url;
+          },
+        },
+      };
+      openExternalUrl('https://example.com');
+      assert.equal(createdUrl, 'https://example.com');
+      delete globalThis.chrome;
     });
   });
 });

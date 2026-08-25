@@ -530,6 +530,98 @@ export function diffHeldCourses({
 }
 
 /**
+ * Handles Vigil completion when all subjects are satisfied.
+ * Persists complete state, clears pass alarm, updates badge, logs completion notice, and appends pass record.
+ *
+ * @param {{
+ *   updatedVigil: object,
+ *   reconciliation: object,
+ *   heldSnapshot: Record<string|number, number|null>,
+ *   sectionsSnapshot: Record<string|number, Array<number>>,
+ *   storageApi?: object,
+ *   alarmsApi?: object,
+ *   actionApi?: object,
+ *   notificationsApi?: object,
+ *   now: number,
+ *   strikePerformed?: boolean,
+ *   verified?: boolean
+ * }} params
+ * @returns {Promise<object>} Pass result summary
+ */
+export async function handlePassCompletion({
+  updatedVigil,
+  reconciliation,
+  heldSnapshot,
+  sectionsSnapshot,
+  storageApi,
+  alarmsApi,
+  actionApi,
+  notificationsApi,
+  now,
+  strikePerformed = false,
+  verified = false,
+}) {
+  updatedVigil.state = 'complete';
+  updatedVigil.nextFireTime = null;
+  updatedVigil.lastChangeAt = now;
+
+  if (storageApi?.set) {
+    await storageApi.set({
+      vigil: updatedVigil,
+      lastCompletePassAt: now,
+      reconciliation,
+      lastHeldSnapshot: heldSnapshot,
+      lastSectionsSnapshot: sectionsSnapshot,
+    });
+  }
+
+  if (alarmsApi?.clear) {
+    await alarmsApi.clear('vigil_pass');
+  }
+
+  updateBadge({ state: 'complete', actionApi });
+
+  await appendLedgerEntry({
+    entry: {
+      tier: 'notice',
+      type: 'complete',
+      title: 'Vigil complete',
+      cause: 'Every subject holds its Wanted Section',
+      timestamp: now,
+    },
+    storageApi,
+    notificationsApi,
+    alarmsApi,
+    now,
+  });
+
+  const passRecord = {
+    id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+    timestamp: now,
+    state: PAGE_STATES.STEP2_BOUND,
+    complete: true,
+    unresolvedCount: 0,
+    allSatisfied: true,
+    ...(strikePerformed ? { strikePerformed: true, verified } : {}),
+    dispositions: reconciliation.dispositions,
+    summary: strikePerformed
+      ? 'Strike executed: Complete — all subjects satisfied'
+      : 'Complete — all subjects satisfied',
+  };
+
+  await appendPassTail({ passRecord, storageApi });
+
+  return {
+    isComplete: true,
+    state: 'complete',
+    ...(strikePerformed ? { strikePerformed: true, verified } : {}),
+    unresolvedCount: 0,
+    allSatisfied: true,
+    reconciliation,
+  };
+}
+
+/**
  * Executes a single Pass per SPEC §7, runs reconciliation on Step2Bound, updates storage & badge,
  * appends to passTail, and schedules the next pass tick.
  *
@@ -824,60 +916,17 @@ export async function executePass({
 
   // 6. Check if Vigil is already Complete (all subjects held at Wanted Section)
   if (reconciliation.allSatisfied) {
-    updatedVigil.state = 'complete';
-    updatedVigil.nextFireTime = null;
-    updatedVigil.lastChangeAt = now;
-
-    if (storageApi?.set) {
-      await storageApi.set({
-        vigil: updatedVigil,
-        lastCompletePassAt: now,
-        reconciliation,
-        lastHeldSnapshot: currentHeldSnapshot,
-        lastSectionsSnapshot: currentSectionsSnapshot,
-      });
-    }
-
-    if (alarmsApi?.clear) {
-      await alarmsApi.clear('vigil_pass');
-    }
-
-    updateBadge({ state: 'complete', actionApi });
-
-    await appendLedgerEntry({
-      entry: {
-        tier: 'notice',
-        type: 'complete',
-        title: 'Vigil complete',
-        cause: 'Every subject holds its Wanted Section',
-        timestamp: now,
-      },
+    return handlePassCompletion({
+      updatedVigil,
+      reconciliation,
+      heldSnapshot: currentHeldSnapshot,
+      sectionsSnapshot: currentSectionsSnapshot,
       storageApi,
-      notificationsApi,
       alarmsApi,
+      actionApi,
+      notificationsApi,
       now,
     });
-
-    const passRecord = {
-      id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
-      timestamp: now,
-      state: PAGE_STATES.STEP2_BOUND,
-      complete: true,
-      unresolvedCount: 0,
-      allSatisfied: true,
-      dispositions: reconciliation.dispositions,
-      summary: 'Complete — all subjects satisfied',
-    };
-
-    await appendPassTail({ passRecord, storageApi });
-
-    return {
-      isComplete: true,
-      state: 'complete',
-      unresolvedCount: 0,
-      allSatisfied: true,
-      reconciliation,
-    };
   }
 
   // 7. Check if Actionable Dispositions Exist -> The Strike!
@@ -1094,63 +1143,19 @@ export async function executePass({
     updatedVigil.previousSectionsSnapshot = postSectionsSnapshot;
 
     if (postReconciliation.allSatisfied) {
-      updatedVigil.state = 'complete';
-      updatedVigil.nextFireTime = null;
-
-      if (storageApi?.set) {
-        await storageApi.set({
-          vigil: updatedVigil,
-          lastCompletePassAt: now,
-          reconciliation: postReconciliation,
-          lastHeldSnapshot: postHeldSnapshot,
-          lastSectionsSnapshot: postSectionsSnapshot,
-        });
-      }
-
-      if (alarmsApi?.clear) {
-        await alarmsApi.clear('vigil_pass');
-      }
-
-      updateBadge({ state: 'complete', actionApi });
-
-      await appendLedgerEntry({
-        entry: {
-          tier: 'notice',
-          type: 'complete',
-          title: 'Vigil complete',
-          cause: 'Every subject holds its Wanted Section',
-          timestamp: now,
-        },
-        storageApi,
-        notificationsApi,
-        alarmsApi,
-        now,
-      });
-
-      const passRecord = {
-        id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
-        timestamp: now,
-        state: PAGE_STATES.STEP2_BOUND,
-        complete: true,
-        unresolvedCount: 0,
-        allSatisfied: true,
-        strikePerformed: true,
-        verified: true,
-        dispositions: postReconciliation.dispositions,
-        summary: 'Strike executed: Complete — all subjects satisfied',
-      };
-
-      await appendPassTail({ passRecord, storageApi });
-
-      return {
-        isComplete: true,
-        state: 'complete',
-        strikePerformed: true,
-        verified: true,
-        unresolvedCount: 0,
-        allSatisfied: true,
+      return handlePassCompletion({
+        updatedVigil,
         reconciliation: postReconciliation,
-      };
+        heldSnapshot: postHeldSnapshot,
+        sectionsSnapshot: postSectionsSnapshot,
+        storageApi,
+        alarmsApi,
+        actionApi,
+        notificationsApi,
+        now,
+        strikePerformed: true,
+        verified: true,
+      });
     }
 
     // Strike performed, but still watching some subjects
