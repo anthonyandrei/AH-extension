@@ -13,6 +13,7 @@ import {
   handleStep2BoundReached,
   handleUnrecognisedAbort,
   handleLoggedOutSuspend,
+  handleSessionProbe,
 } from '../popup/tab-manager.js';
 import {
   executePass,
@@ -65,27 +66,13 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       notificationsApi: chrome.notifications,
     });
   } else if (alarm.name === 'probe_session') {
-    const sessionRes = await checkSession();
-    if (sessionRes?.loggedIn) {
-      if (chrome.alarms?.clear) {
-        await chrome.alarms.clear('probe_session');
-      }
-      const { vigil, plan, ownedTabId } = (await chrome.storage.local.get(['vigil', 'plan', 'ownedTabId'])) || {};
-      if (chrome.tabs?.update && ownedTabId) {
-        try {
-          await chrome.tabs.update(ownedTabId, { url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' });
-        } catch (_) {}
-      }
-      await transitionArmedToWatching({
-        vigil,
-        plan,
-        storageApi: chrome.storage.local,
-        alarmsApi: chrome.alarms,
-        actionApi: chrome.action,
-        tabsApi: chrome.tabs,
-        notificationsApi: chrome.notifications,
-      });
-    }
+    await handleSessionProbe({
+      storageApi: chrome.storage.local,
+      alarmsApi: chrome.alarms,
+      actionApi: chrome.action,
+      tabsApi: chrome.tabs,
+      notificationsApi: chrome.notifications,
+    });
   }
 });
 

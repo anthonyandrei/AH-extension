@@ -8,6 +8,7 @@ import {
   handleOwnedTabReload,
   handleUnrecognisedAbort,
   handleLoggedOutSuspend,
+  handleSessionProbe,
 } from '../popup/tab-manager.js';
 import { PAGE_STATES } from '../content/classifier.js';
 
@@ -301,12 +302,16 @@ describe('tab-manager module', () => {
   });
 
   describe('handleLoggedOutSuspend — suspend on session loss', () => {
-    it('sets vigil to suspended, sets badge to ! amber, raises Alert, and sets 30s session probe', async () => {
+    it('sets vigil to suspended, parks Owned Tab on login page, clears vigil_pass, sets badge to ! amber, raises Alert, and sets 30s session probe', async () => {
+      const tabs = createMockTabs();
+      const tab = await tabs.create({ url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' });
       const storage = createMockStorage({
         vigil: { state: 'watching' },
-        ownedTabId: 101,
+        ownedTabId: tab.id,
       });
       const alarms = createMockAlarms();
+      alarms.create('vigil_pass', { delayInMinutes: 0.1 });
+      alarms.create('owned_tab_reload', { delayInMinutes: 3 });
       const action = createMockAction();
       const notifications = createMockNotifications();
 
@@ -315,11 +320,20 @@ describe('tab-manager module', () => {
         actionApi: action,
         alarmsApi: alarms,
         notificationsApi: notifications,
+        tabsApi: tabs,
         now: 1756180000000,
       });
 
       assert.equal(result.state, 'suspended');
       assert.equal(storage._getStore().vigil.state, 'suspended');
+
+      // Owned Tab parked on login page
+      const updatedTab = await tabs.get(tab.id);
+      assert.equal(updatedTab.url, 'https://archershub.dlsu.edu.ph/');
+
+      // vigil_pass and owned_tab_reload alarms cleared
+      assert.equal((await alarms.get('vigil_pass')), null);
+      assert.equal((await alarms.get('owned_tab_reload')), null);
 
       // Badge set to ! amber (#F59E0B)
       assert.equal(action._getBadge().text, '!');
@@ -334,6 +348,143 @@ describe('tab-manager module', () => {
       assert.equal(ledger.length, 1);
       assert.equal(ledger[0].tier, 'alert');
       assert.equal(ledger[0].type, 'suspended');
+
+      // Notification sent exactly once
+      assert.equal(notifications._getNotifications().length, 1);
+    });
+
+    it('subsequent calls while held in suspended state do not send duplicate Alert notifications', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'suspended' },
+        activeAlert: { type: 'suspended', timestamp: 1756180000000, repeatCount: 0 },
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+
+      await handleLoggedOutSuspend({
+        storageApi: storage,
+        actionApi: action,
+        alarmsApi: alarms,
+        notificationsApi: notifications,
+        now: 1756180030000,
+      });
+
+      // No new notification dispatched
+      assert.equal(notifications._getNotifications().length, 0);
+    });
+  });
+
+  describe('handleSessionProbe — 30s flat session probing and auto-resume', () => {
+    it('while still logged out: remains suspended, keeps 30s probe active, does not send duplicate notifications', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'suspended', lastChangeAt: 1000 },
+        activeAlert: { type: 'suspended', timestamp: 1000, repeatCount: 0 },
+        ownedTabId: 101,
+      });
+      const alarms = createMockAlarms();
+      alarms.create('probe_session', { periodInMinutes: 0.5 });
+      const action = createMockAction();
+      action.setBadgeText({ text: '!' });
+      action.setBadgeBackgroundColor({ color: '#F59E0B' });
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/' }]);
+
+      // Mock fetch returning logged out
+      const mockFetch = async () => ({
+        ok: true,
+        text: async () => '<html><title>Login</title></html>',
+      });
+
+      const result = await handleSessionProbe({
+        fetchImpl: mockFetch,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        tabsApi: tabs,
+        notificationsApi: notifications,
+        now: 31000,
+      });
+
+      assert.equal(result.resumed, false);
+      assert.equal(result.state, 'suspended');
+      assert.equal(storage._getStore().vigil.state, 'suspended');
+      assert.equal(notifications._getNotifications().length, 0); // No extra notifications
+      assert.equal(action._getBadge().text, '!');
+    });
+
+    it('when logging back in: clears probe, resolves alert, navigates Owned Tab, resets cadence, sets badge to watching count, and logs Ambient event', async () => {
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/' }]);
+      const storage = createMockStorage({
+        vigil: { state: 'suspended', lastChangeAt: 1000 },
+        plan: {
+          subjects: [
+            { courseCreationId: 'c1', courseCode: 'CS101', sectionCreationId: 's1', sectionCode: 'G01' },
+            { courseCreationId: 'c2', courseCode: 'MATH101', sectionCreationId: 's2', sectionCode: 'M01' },
+          ],
+        },
+        activeAlert: { type: 'suspended', timestamp: 1000, repeatCount: 0 },
+        ownedTabId: 101,
+      });
+      const alarms = createMockAlarms();
+      alarms.create('probe_session', { periodInMinutes: 0.5 });
+      alarms.create('alert_repeat', { delayInMinutes: 30 });
+      const action = createMockAction();
+      action.setBadgeText({ text: '!' });
+      const notifications = createMockNotifications();
+
+      // Mock fetch returning logged in with shell parameters
+      const mockFetch = async () => ({
+        ok: true,
+        text: async () => `
+          <input type="hidden" id="hdfAcademicSessionId" value="2025-T1" />
+          <input type="hidden" id="hdfRuleAllocationId" value="123" />
+          <input type="hidden" id="hdfEnlistmentRuleId" value="456" />
+        `,
+      });
+
+      const now = 31000;
+      const result = await handleSessionProbe({
+        fetchImpl: mockFetch,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        tabsApi: tabs,
+        notificationsApi: notifications,
+        now,
+      });
+
+      assert.equal(result.resumed, true);
+      assert.equal(result.state, 'watching');
+
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'watching');
+      assert.equal(store.vigil.lastChangeAt, now); // Reset to now for 2s cadence!
+      assert.equal(store.activeAlert, undefined); // activeAlert resolved!
+
+      // probe_session and alert_repeat alarms cleared
+      assert.equal((await alarms.get('probe_session')), null);
+      assert.equal((await alarms.get('alert_repeat')), null);
+
+      // vigil_pass alarm scheduled immediately
+      const passAlarm = alarms._getAlarms().get('vigil_pass');
+      assert.ok(passAlarm);
+
+      // Owned Tab navigated to Enlistment_V2/Index
+      const tab = await tabs.get(101);
+      assert.equal(tab.url, 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index');
+
+      // Badge updated to blue unresolved count 2
+      assert.equal(action._getBadge().text, '2');
+      assert.equal(action._getBadge().color, '#4285F4');
+
+      // Ambient ledger entry logged (never a notification per SPEC §10)
+      const ledger = store.ledger || [];
+      const resumeEntry = ledger.find((e) => e.type === 'resumed');
+      assert.ok(resumeEntry);
+      assert.equal(resumeEntry.tier, 'ambient');
+      assert.equal(resumeEntry.title, 'Vigil resumed');
+      assert.equal(notifications._getNotifications().length, 0); // Ambient does NOT send notification
     });
   });
 

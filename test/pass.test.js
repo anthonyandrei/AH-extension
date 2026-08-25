@@ -492,6 +492,35 @@ describe('pass module', () => {
       assert.equal((await alarms.get('vigil_pass')), null); // Alarms cleared!
       assert.equal((await alarms.get('owned_tab_reload')), null);
     });
+
+    it('stops a suspended Vigil, clearing probe_session and resolving active alert so it never auto-resumes', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'suspended', lastChangeAt: 1000 },
+        activeAlert: { type: 'suspended', timestamp: 1000, repeatCount: 0 },
+        plan: { subjects: [{ courseCode: 'CS101', sectionCode: 'G01' }] },
+      });
+      const alarms = createMockAlarms();
+      alarms.create('probe_session', { periodInMinutes: 0.5 });
+      alarms.create('alert_repeat', { delayInMinutes: 30 });
+      const action = createMockAction();
+      action.setBadgeText({ text: '!' });
+      const notifications = createMockNotifications();
+
+      const result = await stopVigil({
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+      });
+
+      assert.equal(result.state, 'stopped');
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'stopped');
+      assert.equal(store.activeAlert, undefined); // activeAlert resolved!
+      assert.equal(action._getBadge().text, ''); // Badge emptied!
+      assert.equal((await alarms.get('probe_session')), null); // 30s probe cleared!
+      assert.equal((await alarms.get('alert_repeat')), null);
+    });
   });
 
   describe('executePass coordinator', () => {
@@ -525,6 +554,95 @@ describe('pass module', () => {
       assert.equal(store.passTail.length, 1);
       assert.equal(store.passTail[0].complete, false);
       assert.equal(store.lastCompletePassAt, undefined); // Incomplete pass does not update stall clock
+    });
+
+    it('on LoggedOut page state: suspends Vigil, sets badge to ! amber, sends Alert notification, and does NOT schedule vigil_pass', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: { subjects: [{ courseCreationId: 101, sectionCreationId: 501 }] },
+        ownedTabId: 101,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+
+      // Mock tabs.sendMessage to return LoggedOut
+      tabs.sendMessage = async () => ({ success: true, state: PAGE_STATES.LOGGED_OUT });
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        now: 5000,
+      });
+
+      assert.equal(result.isComplete, false);
+      assert.equal(result.state, 'suspended');
+
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'suspended');
+      assert.equal(action._getBadge().text, '!');
+      assert.equal(action._getBadge().color, '#F59E0B');
+
+      // 30s probe alarm created, vigil_pass NOT scheduled
+      assert.ok(alarms._getAlarms().get('probe_session'));
+      assert.equal((await alarms.get('vigil_pass')), null);
+
+      // Alert notification sent
+      assert.equal(notifications._getList().length, 1);
+      assert.match(notifications._getList()[0].title, /suspended/i);
+
+      // Pass tail recorded
+      assert.equal(store.passTail.length, 1);
+      assert.equal(store.passTail[0].complete, false);
+    });
+
+    it('on HTTP catalogue read returning loggedIn: false (session dead): suspends Vigil, alerts, and sets 30s probe', async () => {
+      const storage = createMockStorage({
+        vigil: { state: 'watching', lastChangeAt: 1000 },
+        plan: { subjects: [{ courseCreationId: 101, sectionCreationId: 501 }] },
+        ownedTabId: 101,
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+      const tabs = createMockTabs([{ id: 101, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' }]);
+      tabs.sendMessage = async () => ({ success: true, state: PAGE_STATES.STEP2_BOUND });
+
+      // Mock fetch returning HTML without shell params (redirect to login)
+      const mockFetch = async () => ({
+        ok: true,
+        status: 200,
+        text: async () => '<html><title>Login</title></html>',
+      });
+
+      const result = await executePass({
+        tabsApi: tabs,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        fetchImpl: mockFetch,
+        now: 5000,
+      });
+
+      assert.equal(result.isComplete, false);
+      assert.equal(result.state, 'suspended');
+
+      const store = storage._getStore();
+      assert.equal(store.vigil.state, 'suspended');
+      assert.equal(action._getBadge().text, '!');
+      assert.equal(action._getBadge().color, '#F59E0B');
+
+      // 30s probe alarm created, vigil_pass NOT scheduled
+      assert.ok(alarms._getAlarms().get('probe_session'));
+      assert.equal((await alarms.get('vigil_pass')), null);
+
+      // Alert notification sent
+      assert.equal(notifications._getList().length, 1);
     });
 
     it('on 500 error: treats as no-change, grows interval, records pass, no alert', async () => {

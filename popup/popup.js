@@ -381,15 +381,37 @@ function renderRunPanel() {
       </div>`
     : "";
 
+  const warnHtml = state === "suspended"
+    ? `<div class="note" data-tone="warn" style="margin-top: 8px; margin-bottom: 10px;">
+        <b class="note-t">Session lost</b>
+        <div>The Vigil is suspended and checking every 30s. Log back in to ArchersHub in any tab and the Vigil will resume on its own.</div>
+        <div style="margin-top: 8px;">
+          <button type="button" id="openArchersHubRunBtn" class="btn btn-ghost btn-xs">Open ArchersHub</button>
+        </div>
+      </div>`
+    : "";
+
   panelRun.innerHTML = `
     <div style="padding: 12px 0 10px;">
       <p style="font-size: 14px; font-weight: 600; letter-spacing: -0.01em;">${title}</p>
       <p class="muted" style="font-size: 11.5px; margin-top: 2px;">${subtitle}</p>
     </div>
+    ${warnHtml}
     <div class="sec-h" style="margin-top: 4px;"><span>Subjects</span></div>
     <table class="b-plan"><tbody>${subjectsHtml}</tbody></table>
     ${stopButtonHtml}
   `;
+
+  const openArchersHubRunBtn = panelRun.querySelector("#openArchersHubRunBtn");
+  if (openArchersHubRunBtn) {
+    openArchersHubRunBtn.addEventListener("click", () => {
+      if (typeof chrome !== "undefined" && chrome?.tabs?.create) {
+        chrome.tabs.create({ url: "https://archershub.dlsu.edu.ph/" });
+      } else {
+        window.open("https://archershub.dlsu.edu.ph/", "_blank");
+      }
+    });
+  }
 
   const stopBtn = panelRun.querySelector("#stopVigilBtn");
   if (stopBtn) {

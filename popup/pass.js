@@ -7,8 +7,8 @@
 import { PAGE_STATES } from '../content/classifier.js';
 import { readCatalogue } from './catalogue.js';
 import { updateBadge } from './arming.js';
-import { appendLedgerEntry } from './reporting.js';
-import { steerOwnedTab } from './tab-manager.js';
+import { appendLedgerEntry, resolveActiveAlert } from './reporting.js';
+import { steerOwnedTab, handleLoggedOutSuspend } from './tab-manager.js';
 
 export const DISPOSITIONS = Object.freeze({
   ACQUIRE: 'acquire',
@@ -296,6 +296,23 @@ export async function appendPassTail({ passRecord, storageApi, maxTail = 200 }) 
 }
 
 /**
+ * Appends a LoggedOut pass record to the pass tail when suspended.
+ *
+ * @param {{ storageApi?: object, now?: number }} params
+ * @returns {Promise<Array<object>>}
+ */
+export async function recordSuspendedPass({ storageApi, now = Date.now() }) {
+  const passRecord = {
+    id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+    timestamp: now,
+    state: PAGE_STATES.LOGGED_OUT,
+    complete: false,
+    summary: 'Session logged out — Vigil suspended',
+  };
+  return appendPassTail({ passRecord, storageApi });
+}
+
+/**
  * Stops the Vigil: sets state to Stopped, empties badge, clears alarms, and leaves plan intact.
  *
  * @param {{
@@ -327,6 +344,8 @@ export async function stopVigil({
   if (storageApi?.set) {
     await storageApi.set({ vigil: updatedVigil });
   }
+
+  await resolveActiveAlert({ storageApi, alarmsApi });
 
   if (alarmsApi?.clear) {
     await alarmsApi.clear('vigil_pass');
@@ -468,8 +487,9 @@ export async function executePass({
 
   // 2. If state is not Step2Bound, steer tab, record incomplete pass, and end pass here
   if (pageState !== PAGE_STATES.STEP2_BOUND) {
+    let steerResult = null;
     if (tabsApi && ownedTabId) {
-      await steerOwnedTab({
+      steerResult = await steerOwnedTab({
         tabId: ownedTabId,
         tabsApi,
         storageApi,
@@ -479,6 +499,23 @@ export async function executePass({
         baseUrl,
         now,
       });
+    }
+
+    if (pageState === PAGE_STATES.LOGGED_OUT || steerResult?.state === PAGE_STATES.LOGGED_OUT || steerResult?.action === 'suspend') {
+      await recordSuspendedPass({ storageApi, now });
+      return { isComplete: false, state: 'suspended' };
+    }
+
+    if (pageState === PAGE_STATES.UNRECOGNISED || steerResult?.state === PAGE_STATES.UNRECOGNISED || steerResult?.action === 'abort') {
+      const passRecord = {
+        id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: now,
+        state: PAGE_STATES.UNRECOGNISED,
+        complete: false,
+        summary: 'Unrecognised page state — Vigil aborted',
+      };
+      await appendPassTail({ passRecord, storageApi });
+      return { isComplete: false, state: 'aborted' };
     }
 
     const nextDelay = computeNextPassDelay({
@@ -513,44 +550,61 @@ export async function executePass({
     catalogue = { loggedIn: false, error: err?.message };
   }
 
-  // Handle HTTP error responses
+  // Handle HTTP error responses & session loss
   if (!catalogue || catalogue.loggedIn === false) {
-    const errorStatus = catalogue?.status || (catalogue?.error === '429' ? 429 : catalogue?.error === '403' ? 403 : 500);
+    const errorStatus = catalogue?.status;
 
-    const updatedVigil = { ...vigil };
-    if (errorStatus === 429 || errorStatus === 403) {
-      updatedVigil.rateLimited = true;
+    if (errorStatus === 429 || errorStatus === 403 || errorStatus === 500) {
+      const updatedVigil = { ...vigil };
+      if (errorStatus === 429 || errorStatus === 403) {
+        updatedVigil.rateLimited = true;
+      }
+
+      const nextDelay = computeNextPassDelay({
+        lastChangeAt: updatedVigil.lastChangeAt,
+        now,
+        rateLimited: updatedVigil.rateLimited,
+      });
+
+      updatedVigil.nextFireTime = now + nextDelay;
+
+      if (storageApi?.set) {
+        await storageApi.set({ vigil: updatedVigil });
+      }
+
+      const passRecord = {
+        id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: now,
+        state: PAGE_STATES.STEP2_BOUND,
+        complete: false,
+        error: errorStatus,
+        interval: nextDelay,
+        summary: `HTTP Error ${errorStatus} — treated as ${errorStatus === 500 ? 'no-change' : 'rate-limited'}`,
+      };
+
+      await appendPassTail({ passRecord, storageApi });
+
+      if (alarmsApi?.create) {
+        alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
+      }
+
+      return { isComplete: false, error: errorStatus };
     }
 
-    const nextDelay = computeNextPassDelay({
-      lastChangeAt: updatedVigil.lastChangeAt,
+    // Session logged out mid-Vigil! Suspend the Vigil per SPEC §6, §9
+    await handleLoggedOutSuspend({
+      storageApi,
+      actionApi,
+      alarmsApi,
+      notificationsApi,
+      tabsApi,
+      baseUrl,
       now,
-      rateLimited: updatedVigil.rateLimited,
     });
 
-    updatedVigil.nextFireTime = now + nextDelay;
+    await recordSuspendedPass({ storageApi, now });
 
-    if (storageApi?.set) {
-      await storageApi.set({ vigil: updatedVigil });
-    }
-
-    const passRecord = {
-      id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
-      timestamp: now,
-      state: PAGE_STATES.STEP2_BOUND,
-      complete: false,
-      error: errorStatus,
-      interval: nextDelay,
-      summary: `HTTP Error ${errorStatus} — treated as ${errorStatus === 500 ? 'no-change' : 'rate-limited'}`,
-    };
-
-    await appendPassTail({ passRecord, storageApi });
-
-    if (alarmsApi?.create) {
-      alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
-    }
-
-    return { isComplete: false, error: errorStatus };
+    return { isComplete: false, state: 'suspended' };
   }
 
   // 4. Run Reconciliation against successful read

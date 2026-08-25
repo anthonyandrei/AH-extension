@@ -4,8 +4,8 @@
  */
 
 import { PAGE_STATES } from '../content/classifier.js';
-import { updateBadge } from './arming.js';
-import { appendLedgerEntry } from './reporting.js';
+import { updateBadge, checkSession } from './arming.js';
+import { appendLedgerEntry, resolveActiveAlert } from './reporting.js';
 
 const ENLISTMENT_URL = 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index';
 
@@ -253,6 +253,7 @@ export async function handleLoggedOutSuspend({
 
   if (alarmsApi?.clear) {
     await alarmsApi.clear('owned_tab_reload');
+    await alarmsApi.clear('vigil_pass');
   }
 
   if (alarmsApi?.create) {
@@ -282,6 +283,98 @@ export async function handleLoggedOutSuspend({
   });
 
   return { state: 'suspended' };
+}
+
+/**
+ * Handles the 30s session probe tick while Suspended.
+ * If logged in: clears probe, resolves alert, navigates Owned Tab, resets cadence to 2s, sets badge to watching count, and logs Ambient event.
+ * If still logged out: stays suspended without extra notifications.
+ *
+ * @param {{
+ *   fetchImpl?: typeof fetch,
+ *   storageApi?: object,
+ *   alarmsApi?: object,
+ *   actionApi?: object,
+ *   tabsApi?: object,
+ *   notificationsApi?: object,
+ *   baseUrl?: string,
+ *   now?: number
+ * }} params
+ * @returns {Promise<{ resumed: boolean, state: string, vigil?: object }>}
+ */
+export async function handleSessionProbe({
+  fetchImpl = fetch,
+  storageApi = typeof chrome !== 'undefined' ? chrome?.storage?.local : null,
+  alarmsApi = typeof chrome !== 'undefined' ? chrome?.alarms : null,
+  actionApi = typeof chrome !== 'undefined' ? chrome?.action : null,
+  tabsApi = typeof chrome !== 'undefined' ? chrome?.tabs : null,
+  notificationsApi = typeof chrome !== 'undefined' ? chrome?.notifications : null,
+  baseUrl = 'https://archershub.dlsu.edu.ph',
+  now = Date.now(),
+} = {}) {
+  const sessionRes = await checkSession({ fetchImpl, baseUrl });
+
+  if (!sessionRes?.loggedIn) {
+    return { resumed: false, state: 'suspended' };
+  }
+
+  // Session restored! Clear probe alarm
+  if (alarmsApi?.clear) {
+    await alarmsApi.clear('probe_session');
+  }
+
+  // Resolve active alert and clear repeat alarm
+  await resolveActiveAlert({ storageApi, alarmsApi });
+
+  const data = storageApi?.get ? await storageApi.get(['vigil', 'plan', 'ownedTabId']) : {};
+  const currentVigil = data?.vigil || {};
+  const plan = data?.plan || {};
+  const ownedTabId = data?.ownedTabId;
+
+  const updatedVigil = {
+    ...currentVigil,
+    state: 'watching',
+    nextFireTime: null,
+    lastChangeAt: now,
+    rateLimited: false,
+  };
+
+  if (storageApi?.set) {
+    await storageApi.set({ vigil: updatedVigil });
+  }
+
+  if (alarmsApi?.create) {
+    alarmsApi.create('vigil_pass', { delayInMinutes: 0.01 });
+  }
+
+  const unresolvedCount = Array.isArray(plan.subjects) ? plan.subjects.length : 0;
+  updateBadge({
+    state: 'watching',
+    unresolvedCount,
+    actionApi,
+  });
+
+  await appendLedgerEntry({
+    entry: {
+      tier: 'ambient',
+      type: 'resumed',
+      title: 'Vigil resumed',
+      cause: 'Session restored',
+      timestamp: now,
+    },
+    storageApi,
+    notificationsApi,
+    alarmsApi,
+    now,
+  });
+
+  if (tabsApi?.update && ownedTabId) {
+    try {
+      await tabsApi.update(ownedTabId, { url: `${baseUrl}/Enlistment_V2/Index` });
+    } catch (_) {}
+  }
+
+  return { resumed: true, state: 'watching', vigil: updatedVigil };
 }
 
 /**
