@@ -194,7 +194,7 @@ export function classifyPageState(options = {}) {
 
   // 8. Step1Configured (Observer: CS)
   // DOM signal: #btnAdd present, display: none
-  if (btnAdd && !isElementVisible(btnAdd, win)) {
+  if (isStep1Active && btnAdd && !isElementVisible(btnAdd, win)) {
     const computedDisplay = (win && typeof win.getComputedStyle === 'function')
       ? win.getComputedStyle(btnAdd)?.display
       : btnAdd.style?.display;

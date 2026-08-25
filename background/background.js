@@ -58,7 +58,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       if (chrome.alarms?.clear) {
         await chrome.alarms.clear('probe_session');
       }
-      const { vigil, plan } = (await chrome.storage.local.get(['vigil', 'plan'])) || {};
+      const { vigil, plan, ownedTabId } = (await chrome.storage.local.get(['vigil', 'plan', 'ownedTabId'])) || {};
+      if (chrome.tabs?.update && ownedTabId) {
+        try {
+          await chrome.tabs.update(ownedTabId, { url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' });
+        } catch (_) {}
+      }
       await transitionArmedToWatching({
         vigil,
         plan,

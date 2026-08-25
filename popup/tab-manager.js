@@ -81,7 +81,6 @@ export async function getOwnedTab({
  * Handles Owned Tab reaching Step2Bound: records timestamp and schedules 3-minute reload alarm.
  *
  * @param {{
- *   tabId: number,
  *   storageApi?: object,
  *   alarmsApi?: object,
  *   now?: number
@@ -89,7 +88,6 @@ export async function getOwnedTab({
  * @returns {Promise<{ state: string, reloadAlarmScheduled: boolean }>}
  */
 export async function handleStep2BoundReached({
-  tabId,
   storageApi = typeof chrome !== 'undefined' ? chrome?.storage?.local : null,
   alarmsApi = typeof chrome !== 'undefined' ? chrome?.alarms : null,
   now = Date.now(),
@@ -225,6 +223,7 @@ export async function handleUnrecognisedAbort({
  *   alarmsApi?: object,
  *   notificationsApi?: object,
  *   tabsApi?: object,
+ *   baseUrl?: string,
  *   now?: number
  * }} params
  * @returns {Promise<{ state: string }>}
@@ -235,10 +234,12 @@ export async function handleLoggedOutSuspend({
   alarmsApi = typeof chrome !== 'undefined' ? chrome?.alarms : null,
   notificationsApi = typeof chrome !== 'undefined' ? chrome?.notifications : null,
   tabsApi = typeof chrome !== 'undefined' ? chrome?.tabs : null,
+  baseUrl = 'https://archershub.dlsu.edu.ph',
   now = Date.now(),
 } = {}) {
   const currentData = storageApi?.get ? await storageApi.get(['vigil', 'ownedTabId']) : {};
   const currentVigil = currentData?.vigil || {};
+  const ownedTabId = currentData?.ownedTabId;
 
   const updatedVigil = {
     ...currentVigil,
@@ -256,6 +257,12 @@ export async function handleLoggedOutSuspend({
 
   if (alarmsApi?.create) {
     alarmsApi.create('probe_session', { periodInMinutes: 0.5 });
+  }
+
+  if (tabsApi?.update && ownedTabId) {
+    try {
+      await tabsApi.update(ownedTabId, { url: `${baseUrl}/` });
+    } catch (_) {}
   }
 
   updateBadge({ state: 'suspended', actionApi });

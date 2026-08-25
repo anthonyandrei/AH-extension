@@ -203,6 +203,36 @@ export function updateBadge({ state, unresolvedCount = 0, actionApi = typeof chr
  * }} params
  * @returns {Promise<object>} The updated vigil record
  */
+async function activateOwnedTab({
+  tabId = null,
+  tabsApi,
+  storageApi,
+  actionApi,
+  alarmsApi,
+  notificationsApi,
+  baseUrl,
+  now,
+}) {
+  if (!tabsApi) return;
+  let targetTabId = tabId;
+  if (!targetTabId) {
+    const ownedTab = await ensureOwnedTab({ tabsApi, storageApi, baseUrl });
+    targetTabId = ownedTab?.tabId;
+  }
+  if (targetTabId) {
+    await steerOwnedTab({
+      tabId: targetTabId,
+      tabsApi,
+      storageApi,
+      actionApi,
+      alarmsApi,
+      notificationsApi,
+      baseUrl,
+      now,
+    });
+  }
+}
+
 /**
  * Transitions Vigil from armed to watching, clearing alarms and updating badge.
  *
@@ -265,21 +295,15 @@ export async function transitionArmedToWatching({
     now,
   });
 
-  if (tabsApi) {
-    const ownedTab = await ensureOwnedTab({ tabsApi, storageApi, baseUrl });
-    if (ownedTab?.tabId) {
-      await steerOwnedTab({
-        tabId: ownedTab.tabId,
-        tabsApi,
-        storageApi,
-        actionApi,
-        alarmsApi,
-        notificationsApi,
-        baseUrl,
-        now,
-      });
-    }
-  }
+  await activateOwnedTab({
+    tabsApi,
+    storageApi,
+    actionApi,
+    alarmsApi,
+    notificationsApi,
+    baseUrl,
+    now,
+  });
 
   return updatedVigil;
 }
@@ -413,18 +437,16 @@ export async function armVigil({
       now,
     });
 
-    if (tabsApi && ownedTab?.tabId) {
-      await steerOwnedTab({
-        tabId: ownedTab.tabId,
-        tabsApi,
-        storageApi,
-        actionApi,
-        alarmsApi,
-        notificationsApi,
-        baseUrl,
-        now,
-      });
-    }
+    await activateOwnedTab({
+      tabId: ownedTab?.tabId,
+      tabsApi,
+      storageApi,
+      actionApi,
+      alarmsApi,
+      notificationsApi,
+      baseUrl,
+      now,
+    });
 
     return {
       success: true,

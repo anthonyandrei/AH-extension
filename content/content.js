@@ -18,6 +18,23 @@ async function getClassifier() {
   }
 }
 
+function getContentContext() {
+  return {
+    document,
+    window,
+    location: window.location,
+    activeLoop,
+    setActiveLoop: (l) => {
+      activeLoop = l;
+    },
+    sendMessage: (msg) => {
+      try {
+        chrome.runtime.sendMessage(msg);
+      } catch (_) {}
+    },
+  };
+}
+
 // Runtime message listener for background worker / popup requests
 if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -27,20 +44,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
           sendResponse({ success: false, error: 'Classifier not initialized' });
           return;
         }
-        mod.handleContentMessage(message, sender, sendResponse, {
-          document,
-          window,
-          location: window.location,
-          activeLoop,
-          setActiveLoop: (l) => {
-            activeLoop = l;
-          },
-          sendMessage: (msg) => {
-            try {
-              chrome.runtime.sendMessage(msg);
-            } catch (_) {}
-          },
-        });
+        mod.handleContentMessage(message, sender, sendResponse, getContentContext());
       })
       .catch((err) => {
         sendResponse({ success: false, error: err.message });
@@ -58,20 +62,7 @@ async function checkAndAutoSteer() {
     if (data?.vigil?.state === 'watching') {
       const mod = await getClassifier();
       if (!mod || !mod.handleContentMessage) return;
-      mod.handleContentMessage({ type: 'STEER_TAB' }, {}, () => {}, {
-        document,
-        window,
-        location: window.location,
-        activeLoop,
-        setActiveLoop: (l) => {
-          activeLoop = l;
-        },
-        sendMessage: (msg) => {
-          try {
-            chrome.runtime.sendMessage(msg);
-          } catch (_) {}
-        },
-      });
+      mod.handleContentMessage({ type: 'STEER_TAB' }, {}, () => {}, getContentContext());
     }
   } catch (_) {}
 }
