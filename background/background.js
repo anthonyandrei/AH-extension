@@ -80,7 +80,6 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
     notificationId,
     tabsApi: chrome.tabs,
     windowsApi: chrome.windows,
-    actionApi: chrome.action,
     storageApi: chrome.storage.local,
     notificationsApi: chrome.notifications,
   });

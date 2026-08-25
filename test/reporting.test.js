@@ -479,17 +479,15 @@ describe('reporting module', () => {
       assert.equal(clearedNotifId, 'notif_123');
     });
 
-    it('opens popup when no Owned Tab is currently open', async () => {
-      let popupOpened = false;
+    it('does not attempt to open popup or manipulate tabs when no Owned Tab is found', async () => {
       let clearedNotifId = null;
+      let tabUpdated = null;
 
       const mockTabs = {
         query: async () => [],
-      };
-
-      const mockAction = {
-        openPopup: async () => {
-          popupOpened = true;
+        update: async (tabId, updateProps) => {
+          tabUpdated = { tabId, updateProps };
+          return tabUpdated;
         },
       };
 
@@ -503,12 +501,11 @@ describe('reporting module', () => {
       await handleNotificationClick({
         notificationId: 'notif_456',
         tabsApi: mockTabs,
-        actionApi: mockAction,
         notificationsApi: mockNotifications,
       });
 
-      assert.equal(popupOpened, true);
-      assert.equal(clearedNotifId, 'notif_456');
+      assert.equal(tabUpdated, null, 'Must not update any tab');
+      assert.equal(clearedNotifId, 'notif_456', 'Notification should still be cleared on click');
     });
   });
 });

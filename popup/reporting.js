@@ -255,14 +255,13 @@ export function exportPassTail({
 
 /**
  * Handles user clicking a chrome.notification.
- * Focuses the Owned Tab if open, otherwise opens the extension popup or creates an ArchersHub tab.
- * Never performs page clicks or drives the page toward Final Submit.
+ * Exclusively focuses the Owned Tab (and its window) if open.
+ * Never performs page clicks, drives the page toward Final Submit, or opens popups.
  *
  * @param {{
  *   notificationId: string,
  *   tabsApi?: object,
  *   windowsApi?: object,
- *   actionApi?: object,
  *   storageApi?: object,
  *   notificationsApi?: object
  * }} params
@@ -271,7 +270,6 @@ export async function handleNotificationClick({
   notificationId,
   tabsApi = typeof chrome !== 'undefined' ? chrome?.tabs : null,
   windowsApi = typeof chrome !== 'undefined' ? chrome?.windows : null,
-  actionApi = typeof chrome !== 'undefined' ? chrome?.action : null,
   storageApi = typeof chrome !== 'undefined' ? chrome?.storage?.local : null,
   notificationsApi = typeof chrome !== 'undefined' ? chrome?.notifications : null,
 }) {
@@ -309,16 +307,6 @@ export async function handleNotificationClick({
     }
     if (typeof targetTab.windowId === 'number' && windowsApi?.update) {
       await windowsApi.update(targetTab.windowId, { focused: true });
-    }
-    return;
-  }
-
-  // 3. If no tab found: open extension popup if supported
-  if (actionApi?.openPopup) {
-    try {
-      await actionApi.openPopup();
-    } catch {
-      // Ignored
     }
   }
 }

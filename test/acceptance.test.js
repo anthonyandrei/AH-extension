@@ -58,6 +58,7 @@ import {
   filterLedgerEntries,
   formatEventTime,
   exportPassTail,
+  handleNotificationClick,
 } from '../popup/reporting.js';
 
 import {
@@ -2246,6 +2247,110 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
 
       // Ambient tier must NEVER fire a desktop notification per SPEC §10
       assert.equal(notifications._getNotifications().length, 0);
+    });
+  });
+
+  describe('Issue #34 Acceptance: Align notification click behaviour with spec and eliminate scope creep', () => {
+    it('Criterion 1: Clicking a notification focuses the existing Owned Tab and window when present', async () => {
+      let focusedWindowId = null;
+      let clearedNotificationId = null;
+
+      const tabs = createMockTabs([
+        { id: 101, windowId: 400, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index', active: false },
+      ]);
+
+      const windows = {
+        update: async (id, props) => {
+          if (props.focused) focusedWindowId = id;
+          return { id, ...props };
+        },
+      };
+
+      const notifications = {
+        clear: (id) => {
+          clearedNotificationId = id;
+        },
+      };
+
+      const storage = createMockStorage({
+        ownedTabId: 101,
+      });
+
+      await handleNotificationClick({
+        notificationId: 'notif_alert_1',
+        tabsApi: tabs,
+        windowsApi: windows,
+        storageApi: storage,
+        notificationsApi: notifications,
+      });
+
+      const ownedTab = await tabs.get(101);
+      assert.equal(ownedTab.active, true, 'Must activate the Owned Tab');
+      assert.equal(focusedWindowId, 400, 'Must focus the window containing the Owned Tab');
+      assert.equal(clearedNotificationId, 'notif_alert_1', 'Must clear the clicked notification');
+    });
+
+    it('Criterion 2: No popup window opening attempt is made if no Owned Tab is found', async () => {
+      let focusedWindowId = null;
+      let clearedNotificationId = null;
+
+      const tabs = createMockTabs([]); // No tabs open
+
+      const windows = {
+        update: async (id, props) => {
+          if (props.focused) focusedWindowId = id;
+          return { id, ...props };
+        },
+      };
+
+      const notifications = {
+        clear: (id) => {
+          clearedNotificationId = id;
+        },
+      };
+
+      const storage = createMockStorage({
+        ownedTabId: null,
+      });
+
+      await handleNotificationClick({
+        notificationId: 'notif_alert_2',
+        tabsApi: tabs,
+        windowsApi: windows,
+        storageApi: storage,
+        notificationsApi: notifications,
+      });
+
+      assert.equal(focusedWindowId, null, 'Must not focus any window when tab is absent');
+      assert.equal(clearedNotificationId, 'notif_alert_2', 'Must clear the clicked notification');
+    });
+
+    it('Criterion 3: Notification click only performs tab/window focus and never dispatches execution or messages', async () => {
+      let messagesSent = 0;
+
+      const tabs = createMockTabs([
+        { id: 101, windowId: 500, url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index', active: false },
+      ]);
+      tabs.sendMessage = async () => {
+        messagesSent++;
+        return { success: true };
+      };
+
+      const windows = {
+        update: async (id, props) => ({ id, ...props }),
+      };
+      const storage = createMockStorage({ ownedTabId: 101 });
+
+      await handleNotificationClick({
+        notificationId: 'notif_alert_3',
+        tabsApi: tabs,
+        windowsApi: windows,
+        storageApi: storage,
+      });
+
+      const tab = await tabs.get(101);
+      assert.equal(tab.active, true, 'Must activate the tab');
+      assert.equal(messagesSent, 0, 'Must never send execution messages to tab on notification click');
     });
   });
 });
