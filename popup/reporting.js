@@ -47,7 +47,7 @@ function sendNotification(notificationsApi, { title, message, priority = 1 }) {
   if (!notificationsApi?.create) return;
   notificationsApi.create({
     type: 'basic',
-    iconUrl: '/icons/icon128.png',
+    iconUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
     title: title || '',
     message: message || title || '',
     priority,
@@ -62,7 +62,6 @@ function sendNotification(notificationsApi, { title, message, priority = 1 }) {
  *   storageApi?: object,
  *   notificationsApi?: object,
  *   alarmsApi?: object,
- *   actionApi?: object,
  *   now?: number
  * }} params
  * @returns {Promise<Array<object>>} Updated ledger array
@@ -72,7 +71,6 @@ export async function appendLedgerEntry({
   storageApi,
   notificationsApi,
   alarmsApi,
-  actionApi,
   now = Date.now(),
 }) {
   const currentData = storageApi?.get ? await storageApi.get(['ledger', 'activeAlert']) : {};
@@ -315,18 +313,13 @@ export async function handleNotificationClick({
     return;
   }
 
-  // 3. If no tab found: open extension popup if supported, otherwise open ArchersHub tab
+  // 3. If no tab found: open extension popup if supported
   if (actionApi?.openPopup) {
     try {
       await actionApi.openPopup();
-      return;
     } catch {
-      // Fallback to tabs.create if openPopup is unavailable or fails
+      // Ignored
     }
-  }
-
-  if (tabsApi.create) {
-    await tabsApi.create({ url: 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index' });
   }
 }
 

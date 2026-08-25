@@ -430,13 +430,25 @@ export async function rebuildAlarmsFromStorage({
   actionApi,
   now = Date.now(),
 }) {
-  const result = (storageApi?.get ? await storageApi.get(['vigil', 'plan']) : {}) || {};
+  const result = (storageApi?.get ? await storageApi.get(['vigil', 'plan', 'activeAlert']) : {}) || {};
   const vigil = result.vigil;
   const plan = result.plan;
+  const activeAlert = result.activeAlert;
+
+  // Restore alert_repeat alarm if unresolved activeAlert exists and has repeats remaining
+  if (activeAlert && typeof activeAlert.repeatCount === 'number' && activeAlert.repeatCount < 3) {
+    if (alarmsApi?.get && alarmsApi?.create) {
+      const existingAlertAlarm = await alarmsApi.get('alert_repeat');
+      if (!existingAlertAlarm) {
+        alarmsApi.create('alert_repeat', { delayInMinutes: 30 });
+      }
+    }
+  }
 
   if (!vigil || vigil.state === 'none' || vigil.state === 'stopped') {
-    if (alarmsApi?.clearAll) {
-      await alarmsApi.clearAll();
+    if (alarmsApi?.clear) {
+      await alarmsApi.clear('vigil_start');
+      await alarmsApi.clear('vigil_keepalive');
     }
     updateBadge({ state: vigil?.state || 'none', actionApi });
     return { state: vigil?.state || 'none' };

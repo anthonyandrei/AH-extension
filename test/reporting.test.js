@@ -479,7 +479,7 @@ describe('reporting module', () => {
       assert.equal(clearedNotifId, 'notif_123');
     });
 
-    it('opens popup or creates tab when no Owned Tab is currently open', async () => {
+    it('opens popup when no Owned Tab is currently open', async () => {
       let popupOpened = false;
       let clearedNotifId = null;
 

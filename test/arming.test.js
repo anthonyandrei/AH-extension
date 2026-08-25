@@ -518,6 +518,35 @@ describe('arming module', () => {
       assert.equal(ledger[0].tier, 'ambient');
       assert.equal(ledger[0].title, 'Vigil started');
     });
+
+    it('restores alert_repeat alarm when an unresolved activeAlert with repeats remaining exists in storage', async () => {
+      const now = 1756180000000;
+      const storage = createMockStorage({
+        vigil: {
+          state: 'suspended',
+          lastChangeAt: now - 60000,
+        },
+        activeAlert: {
+          type: 'suspended',
+          timestamp: now - 60000,
+          repeatCount: 1,
+          title: 'Suspended',
+        },
+      });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+
+      const result = await rebuildAlarmsFromStorage({
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        now,
+      });
+
+      assert.equal(result.state, 'suspended');
+      assert.ok(alarms._getAlarms().has('alert_repeat'));
+      assert.equal(alarms._getAlarms().get('alert_repeat')?.delayInMinutes, 30);
+    });
   });
 
   describe('formatDateTimeDisplay', () => {
