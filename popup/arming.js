@@ -4,6 +4,7 @@
 
 import { extractShellParams } from './catalogue.js';
 import { appendLedgerEntry } from './reporting.js';
+import { ensureOwnedTab, steerOwnedTab } from './tab-manager.js';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -202,12 +203,31 @@ export function updateBadge({ state, unresolvedCount = 0, actionApi = typeof chr
  * }} params
  * @returns {Promise<object>} The updated vigil record
  */
+/**
+ * Transitions Vigil from armed to watching, clearing alarms and updating badge.
+ *
+ * @param {{
+ *   vigil: object,
+ *   plan?: object,
+ *   storageApi?: object,
+ *   alarmsApi?: object,
+ *   actionApi?: object,
+ *   tabsApi?: object,
+ *   notificationsApi?: object,
+ *   baseUrl?: string,
+ *   now?: number
+ * }} params
+ * @returns {Promise<object>} The updated vigil record
+ */
 export async function transitionArmedToWatching({
   vigil,
   plan,
   storageApi,
   alarmsApi,
   actionApi,
+  tabsApi = typeof chrome !== 'undefined' ? chrome?.tabs : null,
+  notificationsApi = typeof chrome !== 'undefined' ? chrome?.notifications : null,
+  baseUrl = 'https://archershub.dlsu.edu.ph',
   now = Date.now(),
 }) {
   const updatedVigil = {
@@ -240,8 +260,26 @@ export async function transitionArmedToWatching({
       cause: 'Start time reached',
     },
     storageApi,
+    notificationsApi,
+    alarmsApi,
     now,
   });
+
+  if (tabsApi) {
+    const ownedTab = await ensureOwnedTab({ tabsApi, storageApi, baseUrl });
+    if (ownedTab?.tabId) {
+      await steerOwnedTab({
+        tabId: ownedTab.tabId,
+        tabsApi,
+        storageApi,
+        actionApi,
+        alarmsApi,
+        notificationsApi,
+        baseUrl,
+        now,
+      });
+    }
+  }
 
   return updatedVigil;
 }
@@ -291,6 +329,8 @@ export async function checkSession({ fetchImpl = fetch, baseUrl = 'https://arche
  *   storageApi?: object,
  *   alarmsApi?: object,
  *   actionApi?: object,
+ *   tabsApi?: object,
+ *   notificationsApi?: object,
  *   now?: number
  * }} params
  * @returns {Promise<{ success: boolean, state?: string, reason?: string, vigil?: object, plan?: object }>}
@@ -301,10 +341,12 @@ export async function armVigil({
   startTime = null,
   catalogue,
   fetchImpl,
-  baseUrl,
+  baseUrl = 'https://archershub.dlsu.edu.ph',
   storageApi,
   alarmsApi,
   actionApi,
+  tabsApi = typeof chrome !== 'undefined' ? chrome?.tabs : null,
+  notificationsApi = typeof chrome !== 'undefined' ? chrome?.notifications : null,
   now = Date.now(),
 }) {
   // If catalogue was explicitly passed, verify it. Otherwise run 1 authenticated GET check.
@@ -320,6 +362,12 @@ export async function armVigil({
 
   if (!plan || !Array.isArray(plan.subjects) || plan.subjects.length === 0) {
     return { success: false, reason: 'no_subjects' };
+  }
+
+  // Acceptance Criterion 1: arming opens one Owned Tab at /Enlistment_V2/Index
+  let ownedTab = null;
+  if (tabsApi) {
+    ownedTab = await ensureOwnedTab({ tabsApi, storageApi, baseUrl });
   }
 
   const nextFireTime = startTime ? new Date(startTime).getTime() : now;
@@ -360,8 +408,23 @@ export async function armVigil({
         cause: `Watching ${plan.subjects.length} subject${plan.subjects.length === 1 ? '' : 's'}`,
       },
       storageApi,
+      notificationsApi,
+      alarmsApi,
       now,
     });
+
+    if (tabsApi && ownedTab?.tabId) {
+      await steerOwnedTab({
+        tabId: ownedTab.tabId,
+        tabsApi,
+        storageApi,
+        actionApi,
+        alarmsApi,
+        notificationsApi,
+        baseUrl,
+        now,
+      });
+    }
 
     return {
       success: true,
@@ -407,6 +470,8 @@ export async function armVigil({
       cause: `Scheduled for ${formatDateTimeDisplay(startTime || nextFireTime)}`,
     },
     storageApi,
+    notificationsApi,
+    alarmsApi,
     now,
   });
 
@@ -421,16 +486,18 @@ export async function armVigil({
 /**
  * Rebuilds alarms and badge from stored Vigil and Plan on worker startup or wake-up.
  *
- * @param {{ storageApi: object, alarmsApi: object, actionApi?: object, now?: number }} params
+ * @param {{ storageApi: object, alarmsApi: object, actionApi?: object, tabsApi?: object, notificationsApi?: object, now?: number }} params
  * @returns {Promise<{ state: string, vigil?: object, missedStart?: boolean }>}
  */
 export async function rebuildAlarmsFromStorage({
   storageApi,
   alarmsApi,
   actionApi,
+  tabsApi,
+  notificationsApi,
   now = Date.now(),
 }) {
-  const result = (storageApi?.get ? await storageApi.get(['vigil', 'plan', 'activeAlert']) : {}) || {};
+  const result = (storageApi?.get ? await storageApi.get(['vigil', 'plan', 'activeAlert', 'lastBoundAt']) : {}) || {};
   const vigil = result.vigil;
   const plan = result.plan;
   const activeAlert = result.activeAlert;
@@ -449,6 +516,7 @@ export async function rebuildAlarmsFromStorage({
     if (alarmsApi?.clear) {
       await alarmsApi.clear('vigil_start');
       await alarmsApi.clear('vigil_keepalive');
+      await alarmsApi.clear('owned_tab_reload');
     }
     updateBadge({ state: vigil?.state || 'none', actionApi });
     return { state: vigil?.state || 'none' };
@@ -463,6 +531,8 @@ export async function rebuildAlarmsFromStorage({
         storageApi,
         alarmsApi,
         actionApi,
+        tabsApi,
+        notificationsApi,
         now,
       });
 
@@ -497,8 +567,44 @@ export async function rebuildAlarmsFromStorage({
       unresolvedCount,
       actionApi,
     });
+
+    if (alarmsApi?.get && alarmsApi?.create) {
+      const existingReload = await alarmsApi.get('owned_tab_reload');
+      if (!existingReload) {
+        alarmsApi.create('owned_tab_reload', { delayInMinutes: 3 });
+      }
+    }
+
     return {
       state: 'watching',
+      vigil,
+    };
+  }
+
+  if (vigil.state === 'aborted') {
+    updateBadge({
+      state: 'aborted',
+      actionApi,
+    });
+    return {
+      state: 'aborted',
+      vigil,
+    };
+  }
+
+  if (vigil.state === 'suspended') {
+    updateBadge({
+      state: 'suspended',
+      actionApi,
+    });
+    if (alarmsApi?.get && alarmsApi?.create) {
+      const existingProbe = await alarmsApi.get('probe_session');
+      if (!existingProbe) {
+        alarmsApi.create('probe_session', { periodInMinutes: 0.5 });
+      }
+    }
+    return {
+      state: 'suspended',
       vigil,
     };
   }

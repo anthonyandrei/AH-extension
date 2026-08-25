@@ -246,12 +246,105 @@ export function classifyPageState(options = {}) {
 }
 
 /**
+ * Executes the appropriate DOM action for the current Page State per SPEC §6.
+ *
+ * @param {object} options
+ * @param {string} [options.state] - Optional explicit state, otherwise classified fresh
+ * @param {Document} [options.document]
+ * @param {Window} [options.window]
+ * @param {Location} [options.location]
+ * @returns {{ success: boolean, action: string, state: string, snapshot?: object }}
+ */
+export function executeStateAction(options = {}) {
+  const doc = options.document !== undefined ? options.document : (typeof document !== 'undefined' ? document : null);
+  const win = options.window !== undefined ? options.window : (typeof window !== 'undefined' ? window : null);
+  const loc = options.location || (win && win.location) || (doc && doc.location) || null;
+
+  const state = options.state || classifyPageState({ document: doc, window: win, location: loc }).state;
+
+  switch (state) {
+    case PAGE_STATES.STEP1_UNCONFIGURED: {
+      const rdoOpenSection = getById(doc, 'rdoOpenSection');
+      if (rdoOpenSection) {
+        if (!rdoOpenSection.checked) {
+          rdoOpenSection.checked = true;
+          if (typeof rdoOpenSection.dispatchEvent === 'function') {
+            try {
+              rdoOpenSection.dispatchEvent(new Event('input', { bubbles: true }));
+              rdoOpenSection.dispatchEvent(new Event('change', { bubbles: true }));
+            } catch (_) {}
+          }
+        }
+        if (typeof rdoOpenSection.click === 'function') {
+          rdoOpenSection.click();
+        }
+      }
+      const btnAdd = getById(doc, 'btnAdd');
+      if (btnAdd && isElementVisible(btnAdd, win) && !btnAdd.disabled && typeof btnAdd.click === 'function') {
+        btnAdd.click();
+      }
+      return { success: true, action: 'open_section_and_add', state };
+    }
+
+    case PAGE_STATES.STEP1_CONFIGURED: {
+      const divBind = getById(doc, 'DivBindCourseList');
+      if (divBind && typeof divBind.click === 'function') {
+        divBind.click();
+      }
+      return { success: true, action: 'bind_course_list', state };
+    }
+
+    case PAGE_STATES.STEP2_UNBOUND: {
+      const divBind = getById(doc, 'DivBindCourseList');
+      if (divBind && typeof divBind.click === 'function') {
+        divBind.click();
+      }
+      return { success: true, action: 'bind_course_list', state };
+    }
+
+    case PAGE_STATES.SETTLING:
+      return { success: true, action: 'wait', state };
+
+    case PAGE_STATES.ACTIVITY_CLOSED:
+      return { success: true, action: 'wait', state };
+
+    case PAGE_STATES.STEP2_BOUND:
+      return { success: true, action: 'bound', state };
+
+    case PAGE_STATES.STEP3_REACHED:
+      return { success: true, action: 'step3_reached', state };
+
+    case PAGE_STATES.WRONG_PAGE: {
+      if (loc) {
+        loc.href = '/Enlistment_V2/Index';
+      }
+      return { success: true, action: 'navigate', state };
+    }
+
+    case PAGE_STATES.LOGGED_OUT:
+      return { success: false, action: 'suspend', state };
+
+    case PAGE_STATES.UNRECOGNISED: {
+      const snapshot = captureDomSnapshot(doc, win);
+      return { success: false, action: 'abort', state, snapshot };
+    }
+
+    case PAGE_STATES.NO_TAB:
+    case PAGE_STATES.NOT_INJECTED:
+    default:
+      return { success: false, action: 'bg_handled', state };
+  }
+}
+
+/**
  * Runs the 250ms inner reclassification loop while in states 5–9.
  * Stops automatically when Step2Bound (or any other state outside 5–9) is reached.
  *
  * @param {object} options
  * @param {Document} [options.document]
  * @param {Window} [options.window]
+ * @param {Location} [options.location]
+ * @param {boolean} [options.autoAct]
  * @param {number} [options.intervalMs]
  * @param {(result: object) => void} [options.onStateChange]
  * @param {(result: object) => void} [options.onStop]
@@ -263,6 +356,8 @@ export function startInnerLoop(options = {}) {
   const intervalMs = options.intervalMs || 250;
   const doc = options.document !== undefined ? options.document : (typeof document !== 'undefined' ? document : null);
   const win = options.window !== undefined ? options.window : (typeof window !== 'undefined' ? window : null);
+  const loc = options.location || (win && win.location) || (doc && doc.location) || null;
+  const autoAct = options.autoAct !== undefined ? options.autoAct : false;
   const onStateChange = options.onStateChange || (() => {});
   const onStop = options.onStop || (() => {});
   const setTimeoutFn = options.setTimeoutImpl || setTimeout;
@@ -274,11 +369,15 @@ export function startInnerLoop(options = {}) {
 
   function tick() {
     if (stopped) return;
-    const result = classifyPageState({ document: doc, window: win });
+    const result = classifyPageState({ document: doc, window: win, location: loc });
 
     if (result.state !== lastState) {
       lastState = result.state;
       onStateChange(result);
+    }
+
+    if (autoAct && INNER_LOOP_STATES.has(result.state)) {
+      executeStateAction({ state: result.state, document: doc, window: win, location: loc });
     }
 
     if (INNER_LOOP_STATES.has(result.state)) {
@@ -316,6 +415,7 @@ export function startInnerLoop(options = {}) {
 export function handleContentMessage(message, sender, sendResponse, deps = {}) {
   const classifyFn = deps.classifyPageState || classifyPageState;
   const startInnerLoopFn = deps.startInnerLoop || startInnerLoop;
+  const executeActionFn = deps.executeStateAction || executeStateAction;
 
   const msgType = typeof message === 'string' ? message : message?.type;
 
@@ -334,13 +434,27 @@ export function handleContentMessage(message, sender, sendResponse, deps = {}) {
     return false;
   }
 
-  if (msgType === 'START_INNER_LOOP') {
+  if (msgType === 'EXECUTE_ACTION' || msgType === 'executeAction') {
+    const result = executeActionFn({
+      state: message?.state,
+      document: deps.document,
+      window: deps.window,
+      location: deps.location,
+    });
+    sendResponse({ success: true, ...result });
+    return false;
+  }
+
+  if (msgType === 'STEER_TAB' || msgType === 'START_INNER_LOOP') {
     if (deps.activeLoop && deps.activeLoop.isRunning && deps.activeLoop.isRunning()) {
       deps.activeLoop.stop();
     }
+    const autoAct = msgType === 'STEER_TAB' || Boolean(message?.autoAct);
     const loop = startInnerLoopFn({
       document: deps.document,
       window: deps.window,
+      location: deps.location,
+      autoAct,
       onStateChange: (stateRes) => {
         if (deps.sendMessage) {
           deps.sendMessage({ type: 'PAGE_STATE_CHANGED', ...stateRes });
@@ -348,7 +462,15 @@ export function handleContentMessage(message, sender, sendResponse, deps = {}) {
       },
       onStop: (finalRes) => {
         if (deps.sendMessage) {
-          deps.sendMessage({ type: 'INNER_LOOP_STOPPED', ...finalRes });
+          if (finalRes.state === PAGE_STATES.STEP2_BOUND) {
+            deps.sendMessage({ type: 'STEP2_BOUND_REACHED', ...finalRes });
+          } else if (finalRes.state === PAGE_STATES.UNRECOGNISED) {
+            deps.sendMessage({ type: 'UNRECOGNISED_STATE', ...finalRes });
+          } else if (finalRes.state === PAGE_STATES.LOGGED_OUT) {
+            deps.sendMessage({ type: 'LOGGED_OUT_STATE', ...finalRes });
+          } else {
+            deps.sendMessage({ type: 'INNER_LOOP_STOPPED', ...finalRes });
+          }
         }
       },
     });
@@ -369,3 +491,4 @@ export function handleContentMessage(message, sender, sendResponse, deps = {}) {
 
   return false;
 }
+

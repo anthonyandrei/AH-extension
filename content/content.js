@@ -50,4 +50,33 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
   });
 }
 
+// Check if a Vigil is currently watching and initiate auto-steering on page load/reload
+async function checkAndAutoSteer() {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local?.get) return;
+  try {
+    const data = await chrome.storage.local.get(['vigil']);
+    if (data?.vigil?.state === 'watching') {
+      const mod = await getClassifier();
+      if (!mod || !mod.handleContentMessage) return;
+      mod.handleContentMessage({ type: 'STEER_TAB' }, {}, () => {}, {
+        document,
+        window,
+        location: window.location,
+        activeLoop,
+        setActiveLoop: (l) => {
+          activeLoop = l;
+        },
+        sendMessage: (msg) => {
+          try {
+            chrome.runtime.sendMessage(msg);
+          } catch (_) {}
+        },
+      });
+    }
+  } catch (_) {}
+}
+
+checkAndAutoSteer();
+
 console.log('ArchersHub Enlistment Automator content script loaded');
+

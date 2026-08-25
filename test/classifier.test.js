@@ -8,6 +8,7 @@ import {
   classifyPageState,
   startInnerLoop,
   handleContentMessage,
+  executeStateAction,
 } from '../content/classifier.js';
 
 // Minimal mock DOM node builder for headless Node testing
@@ -21,11 +22,38 @@ function createMockElement({
   innerHTML = '',
   outerHTML = '',
   hidden = false,
+  checked = false,
+  disabled = false,
+  onClick = null,
 } = {}) {
   const classes = new Set(classList);
+  const events = new Map();
+  let clickedCount = 0;
+
   const elem = {
     id,
     tagName: tagName.toUpperCase(),
+    checked,
+    disabled,
+    get clickCount() { return clickedCount; },
+    click: () => {
+      clickedCount++;
+      if (typeof onClick === 'function') {
+        onClick(elem);
+      }
+    },
+    addEventListener: (type, handler) => {
+      if (!events.has(type)) events.set(type, []);
+      events.get(type).push(handler);
+    },
+    dispatchEvent: (event) => {
+      const type = event?.type || String(event);
+      const handlers = events.get(type) || [];
+      for (const h of handlers) {
+        h(event);
+      }
+      return true;
+    },
     classList: {
       contains: (cls) => classes.has(cls),
       add: (cls) => classes.add(cls),
@@ -677,5 +705,158 @@ describe('classifier module', () => {
       assert.equal(activeLoopRef.isRunning(), false);
     });
   });
+
+  describe('executeStateAction — §6 action column execution', () => {
+    it('Step1Unconfigured: selects Open Section and clicks #btnAdd', () => {
+      let openSectionClicked = false;
+      let openSectionEventsFired = 0;
+      const rdoOpenSection = createMockElement({
+        id: 'rdoOpenSection',
+        tagName: 'input',
+        checked: false,
+        onClick: () => { openSectionClicked = true; },
+      });
+      rdoOpenSection.addEventListener('change', () => { openSectionEventsFired++; });
+      rdoOpenSection.addEventListener('input', () => { openSectionEventsFired++; });
+
+      let btnAddClicked = false;
+      const btnAdd = createMockElement({
+        id: 'btnAdd',
+        style: { display: 'inline-block' },
+        onClick: () => { btnAddClicked = true; },
+      });
+
+      const step1 = createMockElement({ id: 'STEP1', classList: ['active'] });
+      const doc = createMockDocument({ elements: [step1, rdoOpenSection, btnAdd] });
+      const win = createMockWindow({ document: doc });
+
+      const result = executeStateAction({ document: doc, window: win });
+
+      assert.equal(result.success, true);
+      assert.equal(result.action, 'open_section_and_add');
+      assert.equal(result.state, PAGE_STATES.STEP1_UNCONFIGURED);
+      assert.equal(rdoOpenSection.checked, true);
+      assert.equal(openSectionClicked, true);
+      assert.equal(openSectionEventsFired, 2);
+      assert.equal(btnAddClicked, true);
+    });
+
+    it('Step1Configured: clicks a#DivBindCourseList', () => {
+      let divBindClicked = false;
+      const divBind = createMockElement({
+        id: 'DivBindCourseList',
+        tagName: 'a',
+        onClick: () => { divBindClicked = true; },
+      });
+      const step1 = createMockElement({ id: 'STEP1', classList: ['active'] });
+      const btnAdd = createMockElement({ id: 'btnAdd', style: { display: 'none' } });
+
+      const doc = createMockDocument({ elements: [step1, btnAdd, divBind] });
+      const win = createMockWindow({ document: doc });
+
+      const result = executeStateAction({ document: doc, window: win });
+
+      assert.equal(result.success, true);
+      assert.equal(result.action, 'bind_course_list');
+      assert.equal(result.state, PAGE_STATES.STEP1_CONFIGURED);
+      assert.equal(divBindClicked, true);
+    });
+
+    it('Step2Unbound: clicks a#DivBindCourseList', () => {
+      let divBindClicked = false;
+      const divBind = createMockElement({
+        id: 'DivBindCourseList',
+        tagName: 'a',
+        onClick: () => { divBindClicked = true; },
+      });
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [] });
+
+      const doc = createMockDocument({ elements: [step2, tbl, divBind] });
+      const win = createMockWindow({ document: doc });
+
+      const result = executeStateAction({ document: doc, window: win });
+
+      assert.equal(result.success, true);
+      assert.equal(result.action, 'bind_course_list');
+      assert.equal(result.state, PAGE_STATES.STEP2_UNBOUND);
+      assert.equal(divBindClicked, true);
+    });
+
+    it('Settling: performs no DOM clicks underneath and returns wait action', () => {
+      const body = createMockElement({ tagName: 'body', classList: ['loader-active'] });
+      const doc = createMockDocument({ body });
+      const win = createMockWindow({ document: doc });
+
+      const result = executeStateAction({ document: doc, window: win });
+
+      assert.equal(result.success, true);
+      assert.equal(result.action, 'wait');
+      assert.equal(result.state, PAGE_STATES.SETTLING);
+    });
+
+    it('Step2Bound: reports bound state reached without clicking', () => {
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const tbody = createMockElement({ tagName: 'tbody', children: [createMockElement({ tagName: 'tr' })] });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [tbody] });
+      const btnEnlistment = createMockElement({ id: 'btnEnlistment', style: { display: 'inline-block' } });
+
+      const doc = createMockDocument({ elements: [step2, tbl, btnEnlistment] });
+      const win = createMockWindow({ document: doc });
+
+      const result = executeStateAction({ document: doc, window: win });
+
+      assert.equal(result.success, true);
+      assert.equal(result.action, 'bound');
+      assert.equal(result.state, PAGE_STATES.STEP2_BOUND);
+    });
+
+    it('Unrecognised: captures snapshot and returns abort action', () => {
+      const unknownElem = createMockElement({ id: 'unknownDialog', innerHTML: '<p>Lock</p>' });
+      const doc = createMockDocument({ elements: [unknownElem] });
+      const win = createMockWindow({ document: doc });
+
+      const result = executeStateAction({ document: doc, window: win });
+
+      assert.equal(result.success, false);
+      assert.equal(result.action, 'abort');
+      assert.equal(result.state, PAGE_STATES.UNRECOGNISED);
+      assert.ok(result.snapshot);
+      assert.match(result.snapshot.html, /Lock/);
+    });
+
+    it('WrongPage: navigates location.href to /Enlistment_V2/Index', () => {
+      const doc = createMockDocument({
+        location: {
+          hostname: 'archershub.dlsu.edu.ph',
+          pathname: '/Student/Dashboard',
+          href: 'https://archershub.dlsu.edu.ph/Student/Dashboard',
+        },
+      });
+      const win = createMockWindow({ document: doc });
+
+      const result = executeStateAction({ document: doc, window: win });
+
+      assert.equal(result.success, true);
+      assert.equal(result.action, 'navigate');
+      assert.equal(result.state, PAGE_STATES.WRONG_PAGE);
+      assert.match(doc.location.href, /\/Enlistment_V2\/Index/);
+    });
+
+    it('LoggedOut: returns suspend action signal', () => {
+      const doc = createMockDocument({
+        title: 'Login - ArchersHub',
+        location: { hostname: 'archershub.dlsu.edu.ph', pathname: '/' },
+      });
+      const win = createMockWindow({ document: doc });
+
+      const result = executeStateAction({ document: doc, window: win });
+
+      assert.equal(result.success, false);
+      assert.equal(result.action, 'suspend');
+      assert.equal(result.state, PAGE_STATES.LOGGED_OUT);
+    });
+  });
 });
+
 

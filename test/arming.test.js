@@ -79,6 +79,46 @@ function createMockAction() {
   };
 }
 
+// Mock chrome.tabs factory
+function createMockTabs(initialTabs = []) {
+  const tabs = new Map(initialTabs.map((t) => [t.id, { ...t }]));
+  let nextId = 100;
+  return {
+    create: async (opts) => {
+      const id = ++nextId;
+      const tab = { id, url: opts.url || '', active: opts.active || false, ...opts };
+      tabs.set(id, tab);
+      return tab;
+    },
+    get: async (id) => {
+      const tab = tabs.get(id);
+      if (!tab) throw new Error(`Tab ${id} not found`);
+      return { ...tab };
+    },
+    query: async (q) => {
+      const list = Array.from(tabs.values());
+      if (q?.url) return list.filter((t) => t.url && t.url.includes('archershub.dlsu.edu.ph'));
+      return list;
+    },
+    update: async (id, props) => {
+      const tab = tabs.get(id);
+      if (!tab) throw new Error(`Tab ${id} not found`);
+      Object.assign(tab, props);
+      return { ...tab };
+    },
+    reload: async (id) => {
+      const tab = tabs.get(id);
+      if (!tab) throw new Error(`Tab ${id} not found`);
+      tab.reloaded = (tab.reloaded || 0) + 1;
+      return { ...tab };
+    },
+    sendMessage: async (id, msg) => {
+      return { success: true, ok: true, state: 'Step2Bound' };
+    },
+    _getTabs: () => tabs,
+  };
+}
+
 describe('arming module', () => {
   describe('createVigilRecord', () => {
     it('creates a vigil record with required schema fields', () => {
@@ -434,6 +474,31 @@ describe('arming module', () => {
       assert.equal(result.state, 'watching');
       assert.equal(storage._getStore().vigil.state, 'watching');
       assert.equal(alarms._getAlarms().has('vigil_start'), false);
+    });
+
+    it('with no ArchersHub tab open, arming opens one Owned Tab at /Enlistment_V2/Index and stores ownedTabId', async () => {
+      const storage = createMockStorage();
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const tabs = createMockTabs();
+      const now = 1756180000000;
+
+      const result = await armVigil({
+        plan: validPlan,
+        startMode: 'now',
+        catalogue: { loggedIn: true },
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        tabsApi: tabs,
+        now,
+      });
+
+      assert.equal(result.success, true);
+      assert.equal(result.state, 'watching');
+      assert.ok(storage._getStore().ownedTabId);
+      const createdTab = await tabs.get(storage._getStore().ownedTabId);
+      assert.equal(createdTab.url, 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index');
     });
   });
 
