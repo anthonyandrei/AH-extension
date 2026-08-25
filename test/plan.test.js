@@ -6,6 +6,8 @@ import {
   removeSubject,
   setWantedSection,
   rehydrate,
+  computeAvailabilityText,
+  renderPlanRows,
 } from '../popup/plan.js';
 
 describe('plan module', () => {
@@ -555,6 +557,328 @@ describe('plan module', () => {
       assert.equal(rows[2].sectionCreationId, 's3_gone');
       assert.equal(rows[2].sectionCode, 'H1');
       assert.equal(rows[2].courseOffered, false);
+    });
+  });
+
+  describe('computeAvailabilityText', () => {
+    it('returns "full now" when row.full is true', () => {
+      const row = { full: true, options: [], sectionCreationId: 's1' };
+      assert.equal(computeAvailabilityText(row), 'full now');
+    });
+
+    it('returns "full now" when selected section has available === 0', () => {
+      const row = {
+        full: false,
+        sectionCreationId: 's1',
+        options: [{ sectionCreationId: 's1', available: 0 }],
+      };
+      assert.equal(computeAvailabilityText(row), 'full now');
+    });
+
+    it('returns "X left" when selected section has available > 0', () => {
+      const row = {
+        full: false,
+        sectionCreationId: 's1',
+        options: [{ sectionCreationId: 's1', available: 14 }],
+      };
+      assert.equal(computeAvailabilityText(row), '14 left');
+    });
+
+    it('returns empty string when available is null or section is not found', () => {
+      const row1 = {
+        full: false,
+        sectionCreationId: 's1',
+        options: [{ sectionCreationId: 's1', available: null }],
+      };
+      assert.equal(computeAvailabilityText(row1), '');
+
+      const row2 = {
+        full: false,
+        sectionCreationId: 's2',
+        options: [{ sectionCreationId: 's1', available: 5 }],
+      };
+      assert.equal(computeAvailabilityText(row2), '');
+    });
+  });
+
+  describe('renderPlanRows', () => {
+    // Helper to create mock DOM elements for plan row rendering tests
+    function createMockDom() {
+      const createdElements = [];
+
+      class MockElement {
+        constructor(tagName) {
+          this.tagName = tagName.toUpperCase();
+          this.nodeName = tagName.toUpperCase();
+          this.children = [];
+          this.dataset = {};
+          this.attributes = {};
+          this.style = {};
+          this.textContent = '';
+          this.value = '';
+          this.disabled = false;
+          this.selected = false;
+          this._eventListeners = {};
+          createdElements.push(this);
+        }
+
+        appendChild(child) {
+          this.children.push(child);
+          return child;
+        }
+
+        replaceChildren(...newChildren) {
+          this.children = [...newChildren];
+        }
+
+        setAttribute(attr, val) {
+          this.attributes[attr] = String(val);
+        }
+
+        getAttribute(attr) {
+          return this.attributes[attr] || null;
+        }
+
+        addEventListener(event, handler) {
+          if (!this._eventListeners[event]) this._eventListeners[event] = [];
+          this._eventListeners[event].push(handler);
+        }
+
+        trigger(event) {
+          const handlers = this._eventListeners[event] || [];
+          for (const h of handlers) h();
+        }
+
+        querySelector(selector) {
+          const lower = selector.toLowerCase();
+          for (const child of this.children) {
+            if (child.tagName.toLowerCase() === lower) return child;
+            const found = child.querySelector ? child.querySelector(selector) : null;
+            if (found) return found;
+          }
+          return null;
+        }
+
+        get options() {
+          return this.children.filter((c) => c.tagName === 'OPTION');
+        }
+
+        get selectedIndex() {
+          const opts = this.options;
+          const idx = opts.findIndex((o) => o.selected);
+          return idx >= 0 ? idx : 0;
+        }
+      }
+
+      class MockOption extends MockElement {
+        constructor(text = '', value = '') {
+          super('option');
+          this.textContent = text;
+          this.value = value;
+        }
+      }
+
+      const documentMock = {
+        createElement: (tag) => new MockElement(tag),
+      };
+
+      return { documentMock, MockOption, MockElement };
+    }
+
+    it('renders full section option enabled (not disabled) and marked selected', () => {
+      const { documentMock, MockOption, MockElement } = createMockDom();
+      const planRowsEl = new MockElement('tbody');
+
+      const plan = {
+        academicSessionId: '44',
+        subjects: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CSARCH1',
+            sectionCreationId: 's_full',
+            sectionCode: 'S11',
+          },
+        ],
+      };
+
+      const catalogue = {
+        courses: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CSARCH1',
+            sections: [
+              {
+                sectionCreationId: 's_open',
+                sectionCode: 'S12',
+                sectionName: 'S12 {Avail. Slots: 10}',
+                available: 10,
+              },
+            ],
+          },
+        ],
+      };
+
+      renderPlanRows({
+        planRowsElement: planRowsEl,
+        plan,
+        catalogue,
+        documentImpl: documentMock,
+        OptionImpl: MockOption,
+      });
+
+      assert.equal(planRowsEl.children.length, 1);
+      const tr = planRowsEl.children[0];
+
+      // TD 1: Subject code
+      assert.equal(tr.children[0].textContent, 'CSARCH1');
+
+      // TD 2: Wanted Section select dropdown
+      const select = tr.querySelector('select');
+      assert.ok(select);
+      assert.equal(select.options.length, 2);
+
+      // Option 1: Full section (absent from catalogue)
+      const fullOpt = select.options[0];
+      assert.equal(fullOpt.value, 's_full');
+      assert.equal(fullOpt.textContent, 'S11');
+      assert.equal(fullOpt.disabled, false, 'Full section option must NOT be disabled');
+      assert.equal(fullOpt.selected, true, 'Full section option must be selected');
+      assert.equal(fullOpt.dataset.sectionCode, 'S11');
+
+      // Option 2: Live open section from catalogue
+      const openOpt = select.options[1];
+      assert.equal(openOpt.value, 's_open');
+      assert.equal(openOpt.disabled, false);
+
+      // TD 3: Availability column displays "full now"
+      const tdAvail = tr.children[2];
+      assert.equal(tdAvail.textContent, 'full now');
+    });
+
+    it('renders sections with available === 0 as enabled in dropdown and displays "full now" in availability column', () => {
+      const { documentMock, MockOption, MockElement } = createMockDom();
+      const planRowsEl = new MockElement('tbody');
+
+      const plan = {
+        academicSessionId: '44',
+        subjects: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CSARCH1',
+            sectionCreationId: 's_zero',
+            sectionCode: 'S11',
+          },
+        ],
+      };
+
+      const catalogue = {
+        courses: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CSARCH1',
+            sections: [
+              {
+                sectionCreationId: 's_zero',
+                sectionCode: 'S11',
+                sectionName: 'S11 {Avail. Slots: 0}',
+                available: 0,
+              },
+              {
+                sectionCreationId: 's_open',
+                sectionCode: 'S12',
+                sectionName: 'S12 {Avail. Slots: 5}',
+                available: 5,
+              },
+            ],
+          },
+        ],
+      };
+
+      renderPlanRows({
+        planRowsElement: planRowsEl,
+        plan,
+        catalogue,
+        documentImpl: documentMock,
+        OptionImpl: MockOption,
+      });
+
+      const tr = planRowsEl.children[0];
+      const select = tr.querySelector('select');
+      assert.ok(select);
+      const zeroOpt = select.options[0];
+
+      assert.equal(zeroOpt.value, 's_zero');
+      assert.equal(zeroOpt.disabled, false, '0-slot section must NOT be disabled');
+      assert.equal(zeroOpt.selected, true);
+
+      const tdAvail = tr.children[2];
+      assert.equal(tdAvail.textContent, 'full now');
+    });
+
+    it('allows changing wanted section and calls onPlanChange with updated plan', async () => {
+      const { documentMock, MockOption, MockElement } = createMockDom();
+      const planRowsEl = new MockElement('tbody');
+
+      const plan = {
+        academicSessionId: '44',
+        subjects: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CSARCH1',
+            sectionCreationId: 's_open',
+            sectionCode: 'S12',
+          },
+        ],
+      };
+
+      const catalogue = {
+        courses: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CSARCH1',
+            sections: [
+              {
+                sectionCreationId: 's_zero',
+                sectionCode: 'S11',
+                sectionName: 'S11 {Avail. Slots: 0}',
+                available: 0,
+              },
+              {
+                sectionCreationId: 's_open',
+                sectionCode: 'S12',
+                sectionName: 'S12 {Avail. Slots: 5}',
+                available: 5,
+              },
+            ],
+          },
+        ],
+      };
+
+      let changedPlan = null;
+
+      renderPlanRows({
+        planRowsElement: planRowsEl,
+        plan,
+        catalogue,
+        onPlanChange: (updated) => {
+          changedPlan = updated;
+        },
+        documentImpl: documentMock,
+        OptionImpl: MockOption,
+      });
+
+      const tr = planRowsEl.children[0];
+      const select = tr.querySelector('select');
+      assert.ok(select);
+
+      // Switch selection to s_zero (full section)
+      select.options[0].selected = true;
+      select.options[1].selected = false;
+      select.trigger('change');
+
+      assert.ok(changedPlan);
+      assert.equal(changedPlan.subjects[0].sectionCreationId, 's_zero');
+      assert.equal(changedPlan.subjects[0].sectionCode, 'S11');
     });
   });
 });

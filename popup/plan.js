@@ -149,3 +149,140 @@ export function rehydrate(storedPlan, catalogue) {
     };
   });
 }
+
+/**
+ * Computes availability display text for a rehydrated plan row.
+ * E.g. "full now" for full sections, "X left" for open sections with count, or "" when unknown.
+ *
+ * @param {object} row
+ * @returns {string}
+ */
+export function computeAvailabilityText(row) {
+  if (!row) return "";
+  if (row.full) return "full now";
+
+  const selectedOpt = Array.isArray(row.options)
+    ? row.options.find((opt) => idEquals(opt.sectionCreationId, row.sectionCreationId))
+    : null;
+
+  if (selectedOpt) {
+    if (selectedOpt.available === 0) {
+      return "full now";
+    }
+    if (typeof selectedOpt.available === "number") {
+      return `${selectedOpt.available} left`;
+    }
+  }
+
+  return "";
+}
+
+/**
+ * Renders plan rows into the tbody element.
+ *
+ * @param {{
+ *   planRowsElement: object,
+ *   plan: object,
+ *   catalogue: object,
+ *   onPlanChange?: (newPlan: object) => void,
+ *   onRemoveSubject?: (courseCreationId: string|number) => void,
+ *   documentImpl?: object,
+ *   OptionImpl?: typeof Option
+ * }} params
+ */
+export function renderPlanRows({
+  planRowsElement,
+  plan,
+  catalogue,
+  onPlanChange,
+  onRemoveSubject,
+  documentImpl = typeof document !== "undefined" ? document : null,
+  OptionImpl = typeof Option !== "undefined" ? Option : null,
+}) {
+  if (!planRowsElement || !documentImpl || !OptionImpl) return;
+
+  planRowsElement.replaceChildren();
+  const rows = rehydrate(plan, catalogue);
+
+  for (const row of rows) {
+    const tr = documentImpl.createElement("tr");
+
+    // 1. Subject code
+    const tdSubject = documentImpl.createElement("td");
+    tdSubject.textContent = row.courseCode;
+    tr.appendChild(tdSubject);
+
+    // 2. Wanted Section dropdown
+    const tdSection = documentImpl.createElement("td");
+    const select = documentImpl.createElement("select");
+    select.className = "b-sel";
+    select.setAttribute("aria-label", `Wanted section for ${row.courseCode}`);
+
+    // If section went full (absent from live catalogue), include it as an enabled option
+    if (row.full) {
+      const fullOption = new OptionImpl(row.sectionCode, String(row.sectionCreationId));
+      fullOption.dataset.sectionCode = row.sectionCode;
+      fullOption.disabled = false;
+      fullOption.selected = true;
+      select.appendChild(fullOption);
+    }
+
+    for (const opt of row.options) {
+      const optionEl = new OptionImpl(opt.sectionName, String(opt.sectionCreationId));
+      optionEl.dataset.sectionCode = opt.sectionCode;
+      if (opt.available !== undefined && opt.available !== null) {
+        optionEl.dataset.available = String(opt.available);
+      }
+      if (!row.full && String(opt.sectionCreationId) === String(row.sectionCreationId)) {
+        optionEl.selected = true;
+      }
+      select.appendChild(optionEl);
+    }
+
+    if (!row.full && row.sectionCreationId !== undefined && row.sectionCreationId !== null) {
+      select.value = String(row.sectionCreationId);
+    }
+
+    select.addEventListener("change", () => {
+      const chosenOption = select.options[select.selectedIndex];
+      if (!chosenOption) return;
+      const sectionCreationId = chosenOption.value;
+      const sectionCode = chosenOption.dataset.sectionCode || chosenOption.textContent;
+      const updatedPlan = setWantedSection(plan, row.courseCreationId, {
+        sectionCreationId,
+        sectionCode,
+      });
+      if (typeof onPlanChange === "function") {
+        onPlanChange(updatedPlan);
+      }
+    });
+
+    tdSection.appendChild(select);
+    tr.appendChild(tdSection);
+
+    // 3. Availability text
+    const tdAvail = documentImpl.createElement("td");
+    tdAvail.textContent = computeAvailabilityText(row);
+    tr.appendChild(tdAvail);
+
+    // 4. Remove button
+    const tdRemove = documentImpl.createElement("td");
+    const removeBtn = documentImpl.createElement("button");
+    removeBtn.className = "b-x";
+    removeBtn.textContent = "×";
+    removeBtn.setAttribute("aria-label", `Remove ${row.courseCode}`);
+    removeBtn.addEventListener("click", () => {
+      if (typeof onRemoveSubject === "function") {
+        onRemoveSubject(row.courseCreationId);
+      } else if (typeof onPlanChange === "function") {
+        const updatedPlan = removeSubject(plan, row.courseCreationId);
+        onPlanChange(updatedPlan);
+      }
+    });
+    tdRemove.appendChild(removeBtn);
+    tr.appendChild(tdRemove);
+
+    planRowsElement.appendChild(tr);
+  }
+}
+

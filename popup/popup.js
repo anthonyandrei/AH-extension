@@ -1,5 +1,5 @@
 import { readCatalogue } from "./catalogue.js";
-import { emptyPlan, addSubject, removeSubject, setWantedSection, rehydrate } from "./plan.js";
+import { emptyPlan, addSubject, removeSubject, setWantedSection, rehydrate, renderPlanRows } from "./plan.js";
 import {
   checkSession,
   evaluateChecklist,
@@ -500,98 +500,16 @@ function render() {
   }
 
   if (planRows) {
-    planRows.replaceChildren();
-    const rows = rehydrate(currentPlan, catalogueData);
-
-    for (const row of rows) {
-      const tr = document.createElement("tr");
-
-      // 1. Subject code
-      const tdSubject = document.createElement("td");
-      tdSubject.textContent = row.courseCode;
-      tr.appendChild(tdSubject);
-
-      // 2. Wanted Section dropdown
-      const tdSection = document.createElement("td");
-      const select = document.createElement("select");
-      select.className = "b-sel";
-      select.setAttribute("aria-label", `Wanted section for ${row.courseCode}`);
-
-      if (row.full) {
-        const fullOption = new Option(row.sectionCode, String(row.sectionCreationId));
-        fullOption.disabled = true;
-        fullOption.selected = true;
-        select.appendChild(fullOption);
-      }
-
-      for (const opt of row.options) {
-        const optionEl = new Option(opt.sectionName, String(opt.sectionCreationId));
-        optionEl.dataset.sectionCode = opt.sectionCode;
-        if (opt.available !== undefined && opt.available !== null) {
-          optionEl.dataset.available = String(opt.available);
-        }
-        if (!row.full && String(opt.sectionCreationId) === String(row.sectionCreationId)) {
-          optionEl.selected = true;
-        }
-        select.appendChild(optionEl);
-      }
-
-      if (!row.full && row.sectionCreationId !== undefined && row.sectionCreationId !== null) {
-        select.value = String(row.sectionCreationId);
-      }
-
-      select.addEventListener("change", async () => {
-        const chosenOption = select.options[select.selectedIndex];
-        if (!chosenOption) return;
-        const sectionCreationId = chosenOption.value;
-        const sectionCode = chosenOption.dataset.sectionCode || chosenOption.textContent;
-        currentPlan = setWantedSection(currentPlan, row.courseCreationId, {
-          sectionCreationId,
-          sectionCode,
-        });
+    renderPlanRows({
+      planRowsElement: planRows,
+      plan: currentPlan,
+      catalogue: catalogueData,
+      onPlanChange: async (newPlan) => {
+        currentPlan = newPlan;
         await savePlan(currentPlan);
         render();
-      });
-
-      tdSection.appendChild(select);
-      tr.appendChild(tdSection);
-
-      // 3. Availability text
-      const tdAvail = document.createElement("td");
-      let availText = "";
-      if (row.full) {
-        availText = "full now";
-      } else {
-        const selectedOpt = row.options.find(
-          (opt) => String(opt.sectionCreationId) === String(row.sectionCreationId)
-        );
-        if (selectedOpt) {
-          if (selectedOpt.available === 0) {
-            availText = "full now";
-          } else if (typeof selectedOpt.available === "number") {
-            availText = `${selectedOpt.available} left`;
-          }
-        }
-      }
-      tdAvail.textContent = availText;
-      tr.appendChild(tdAvail);
-
-      // 4. Remove button
-      const tdRemove = document.createElement("td");
-      const removeBtn = document.createElement("button");
-      removeBtn.className = "b-x";
-      removeBtn.textContent = "×";
-      removeBtn.setAttribute("aria-label", `Remove ${row.courseCode}`);
-      removeBtn.addEventListener("click", async () => {
-        currentPlan = removeSubject(currentPlan, row.courseCreationId);
-        await savePlan(currentPlan);
-        render();
-      });
-      tdRemove.appendChild(removeBtn);
-      tr.appendChild(tdRemove);
-
-      planRows.appendChild(tr);
-    }
+      },
+    });
   }
 
   populateAddCourse();

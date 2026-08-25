@@ -57,6 +57,10 @@ import {
   exportPassTail,
 } from '../popup/reporting.js';
 
+import {
+  renderPlanRows,
+} from '../popup/plan.js';
+
 // Mock storage factory
 function createMockStorage(initial = {}) {
   let store = structuredClone(initial);
@@ -1006,6 +1010,163 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
 
       // Verify across the entire test sequence
       assert.equal(confirmClicks, 0, 'Safety Invariant Violated: #btnConfirmEnlistment received a click!');
+    });
+  });
+
+  describe('Check 11: Full Sections remain selectable in the Plan tab (Issue #24)', () => {
+    it('ensures dropdown options for Sections with no available Slots are not disabled, can be selected/saved, and display as "full now"', () => {
+      // Mock DOM infrastructure
+      class MockElement {
+        constructor(tagName) {
+          this.tagName = tagName.toUpperCase();
+          this.nodeName = tagName.toUpperCase();
+          this.children = [];
+          this.dataset = {};
+          this.attributes = {};
+          this.style = {};
+          this.textContent = '';
+          this.value = '';
+          this.disabled = false;
+          this.selected = false;
+          this._eventListeners = {};
+        }
+
+        appendChild(child) {
+          this.children.push(child);
+          return child;
+        }
+
+        replaceChildren(...newChildren) {
+          this.children = [...newChildren];
+        }
+
+        setAttribute(attr, val) {
+          this.attributes[attr] = String(val);
+        }
+
+        getAttribute(attr) {
+          return this.attributes[attr] || null;
+        }
+
+        addEventListener(event, handler) {
+          if (!this._eventListeners[event]) this._eventListeners[event] = [];
+          this._eventListeners[event].push(handler);
+        }
+
+        trigger(event) {
+          const handlers = this._eventListeners[event] || [];
+          for (const h of handlers) h();
+        }
+
+        querySelector(selector) {
+          const lower = selector.toLowerCase();
+          for (const child of this.children) {
+            if (child.tagName.toLowerCase() === lower) return child;
+            const found = child.querySelector ? child.querySelector(selector) : null;
+            if (found) return found;
+          }
+          return null;
+        }
+
+        get options() {
+          return this.children.filter((c) => c.tagName === 'OPTION');
+        }
+
+        get selectedIndex() {
+          const opts = this.options;
+          const idx = opts.findIndex((o) => o.selected);
+          return idx >= 0 ? idx : 0;
+        }
+      }
+
+      class MockOption extends MockElement {
+        constructor(text = '', value = '') {
+          super('option');
+          this.textContent = text;
+          this.value = value;
+        }
+      }
+
+      const documentMock = {
+        createElement: (tag) => new MockElement(tag),
+      };
+
+      const planRowsEl = new MockElement('tbody');
+
+      // 1. Initial Plan with a Wanted Section that has gone full (omitted from catalogue)
+      let plan = {
+        academicSessionId: '44',
+        subjects: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CSARCH1',
+            sectionCreationId: 's_full',
+            sectionCode: 'S11',
+          },
+        ],
+      };
+
+      const catalogue = {
+        courses: [
+          {
+            courseCreationId: 'c101',
+            courseCode: 'CSARCH1',
+            sections: [
+              {
+                sectionCreationId: 's_zero',
+                sectionCode: 'S12',
+                sectionName: 'S12 {Avail. Slots: 0}',
+                available: 0,
+              },
+              {
+                sectionCreationId: 's_open',
+                sectionCode: 'S13',
+                sectionName: 'S13 {Avail. Slots: 8}',
+                available: 8,
+              },
+            ],
+          },
+        ],
+      };
+
+      // Render plan rows
+      renderPlanRows({
+        planRowsElement: planRowsEl,
+        plan,
+        catalogue,
+        onPlanChange: (updated) => {
+          plan = updated;
+        },
+        documentImpl: documentMock,
+        OptionImpl: MockOption,
+      });
+
+      const tr = planRowsEl.children[0];
+      const select = tr.querySelector('select');
+      assert.ok(select);
+
+      // Acceptance criterion 1: In the Plan tab, dropdown options for Sections with no available Slots are not disabled.
+      // Option 0: s_full (omitted from live catalogue)
+      assert.equal(select.options[0].value, 's_full');
+      assert.equal(select.options[0].disabled, false, 'Option for absent/full section must not be disabled');
+      assert.equal(select.options[0].selected, true);
+
+      // Option 1: s_zero (present in catalogue but with 0 slots)
+      assert.equal(select.options[1].value, 's_zero');
+      assert.equal(select.options[1].disabled, false, 'Option with 0 available slots must not be disabled');
+
+      // Acceptance criterion 3: A full Wanted Section continues to display as full in the availability column.
+      const tdAvail = tr.children[2];
+      assert.equal(tdAvail.textContent, 'full now');
+
+      // Acceptance criterion 2: A student can select and save a full Section as the Wanted Section for an offered subject.
+      // Select s_zero (another full section with 0 slots)
+      select.options[0].selected = false;
+      select.options[1].selected = true;
+      select.trigger('change');
+
+      assert.equal(plan.subjects[0].sectionCreationId, 's_zero');
+      assert.equal(plan.subjects[0].sectionCode, 'S12');
     });
   });
 });
