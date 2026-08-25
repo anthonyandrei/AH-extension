@@ -35,43 +35,6 @@ h2 {
     padding-bottom: 4px;
 }
 
-/* Status Section */
-.status-section {
-    margin-bottom: 12px;
-}
-
-.status {
-    padding: 8px 12px;
-    border-radius: 4px;
-    text-align: center;
-    font-weight: 500;
-    font-size: 12px;
-}
-
-.status.not-running {
-    background-color: #e8f4f8;
-    color: #0066cc;
-    border: 1px solid #b3d9ff;
-}
-
-.status.scheduled {
-    background-color: #fff4e6;
-    color: #cc6600;
-    border: 1px solid #ffd9b3;
-}
-
-.status.running {
-    background-color: #e8f5e9;
-    color: #2e7d32;
-    border: 1px solid #c8e6c9;
-}
-
-.status.error {
-    background-color: #ffebee;
-    color: #c62828;
-    border: 1px solid #ffcdd2;
-}
-
 /* Form Groups */
 .form-group {
     margin-bottom: 8px;
@@ -132,41 +95,6 @@ input[type="time"]:focus {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
-.btn-success {
-    background-color: #2e7d32;
-    color: white;
-    flex: 1;
-}
-
-.btn-success:hover {
-    background-color: #1b5e20;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-
-.btn-info {
-    background-color: #1976d2;
-    color: white;
-    flex: 1;
-    margin-left: 8px;
-}
-
-.btn-info:hover {
-    background-color: #1565c0;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-
-.btn-secondary {
-    background-color: #757575;
-    color: white;
-    flex: 1;
-    margin-left: 8px;
-}
-
-.btn-secondary:hover {
-    background-color: #616161;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-
 .btn-danger {
     background-color: #d32f2f;
     color: white;
@@ -186,8 +114,7 @@ input[type="time"]:focus {
 
 /* Sections */
 .add-subject-section,
-.subjects-list-section,
-.scheduling-section {
+.subjects-list-section {
     background-color: white;
     padding: 10px;
     border-radius: 4px;
@@ -236,42 +163,6 @@ input[type="time"]:focus {
     font-style: italic;
 }
 
-/* Radio Groups */
-.schedule-options {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-bottom: 12px;
-}
-
-.radio-group {
-    display: flex;
-    align-items: center;
-}
-
-.radio-label {
-    display: flex;
-    align-items: center;
-    font-size: 12px;
-    cursor: pointer;
-    font-weight: normal;
-    text-transform: none;
-    letter-spacing: normal;
-    margin-bottom: 0;
-}
-
-input[type="radio"] {
-    margin-right: 6px;
-    cursor: pointer;
-}
-
-/* Action Buttons */
-.action-buttons {
-    display: flex;
-    gap: 8px;
-    margin-top: 8px;
-}
-
 /* Log Section */
 .log-section {
     background-color: white;
@@ -310,11 +201,6 @@ input[type="radio"] {
 
 .log-entry.warning {
     color: #f57f17;
-}
-
-/* Utility Classes */
-.hidden {
-    display: none !important;
 }
 
 .error-message {

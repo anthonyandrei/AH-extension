@@ -2,23 +2,12 @@
 const subjectInput = document.getElementById('subjectInput');
 const sectionInput = document.getElementById('sectionInput');
 const addBtn = document.getElementById('addBtn');
-const runBtn = document.getElementById('runBtn');
-const scheduleBtn = document.getElementById('scheduleBtn');
-const clearScheduleBtn = document.getElementById('clearScheduleBtn');
 const subjectsList = document.getElementById('subjectsList');
 const addError = document.getElementById('addError');
-const scheduleError = document.getElementById('scheduleError');
-const statusText = document.getElementById('statusText');
-const statusDiv = document.getElementById('status');
-const executionDate = document.getElementById('executionDate');
-const executionTime = document.getElementById('executionTime');
 const executionLog = document.getElementById('executionLog');
-const scheduledTimeContainer = document.getElementById('scheduledTimeContainer');
-const scheduleTypeRadios = document.querySelectorAll('input[name="scheduleType"]');
 
 // Storage keys
 const SUBJECTS_KEY = 'enlistedSubjects';
-const SCHEDULE_KEY = 'scheduledExecution';
 const LOG_KEY = 'executionLog';
 
 function normalizeSubjectEntry(entry) {
@@ -58,18 +47,12 @@ function dedupeSubjectsBySubject(subjects) {
 // Initialize popup on open
 document.addEventListener('DOMContentLoaded', () => {
     loadSubjects();
-    loadScheduledTime();
     loadExecutionLog();
-    updateStatus();
     setupEventListeners();
-    setDefaultDate();
 });
 
 // Event Listeners
 addBtn.addEventListener('click', addSubject);
-runBtn.addEventListener('click', runEnlistment);
-scheduleBtn.addEventListener('click', saveSchedule);
-clearScheduleBtn.addEventListener('click', clearSchedule);
 
 subjectInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') addSubject();
@@ -78,32 +61,6 @@ subjectInput.addEventListener('keypress', (e) => {
 sectionInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') addSubject();
 });
-
-scheduleTypeRadios.forEach(radio => {
-    radio.addEventListener('change', updateScheduleUI);
-});
-
-// Set default date to today
-function setDefaultDate() {
-    const today = new Date();
-    executionDate.valueAsDate = today;
-    executionTime.value = '08:00';
-}
-
-// Update Schedule UI based on selection
-function updateScheduleUI() {
-    const scheduleType = document.querySelector('input[name="scheduleType"]:checked').value;
-    
-    if (scheduleType === 'scheduled') {
-        scheduledTimeContainer.classList.remove('hidden');
-        scheduleBtn.classList.remove('hidden');
-        clearScheduleBtn.classList.remove('hidden');
-    } else {
-        scheduledTimeContainer.classList.add('hidden');
-        scheduleBtn.classList.add('hidden');
-        clearScheduleBtn.classList.add('hidden');
-    }
-}
 
 // Add subject to list
 function addSubject() {
@@ -187,193 +144,6 @@ function loadSubjects() {
     });
 }
 
-// Save scheduled time
-function saveSchedule() {
-    const date = executionDate.value;
-    const time = executionTime.value;
-    
-    scheduleError.textContent = '';
-    
-    if (!date || !time) {
-        scheduleError.textContent = 'Please select both date and time.';
-        return;
-    }
-    
-    const scheduledDateTime = new Date(`${date}T${time}`);
-    const now = new Date();
-    
-    if (scheduledDateTime <= now) {
-        scheduleError.textContent = 'Scheduled time must be in the future.';
-        return;
-    }
-    
-    chrome.storage.local.set({ 
-        [SCHEDULE_KEY]: { 
-            dateTime: scheduledDateTime.toISOString(),
-            enabled: true
-        } 
-    }, () => {
-        addLog(`Scheduled enlistment for ${scheduledDateTime.toLocaleString()}`, 'info');
-        updateStatus();
-        
-        // Update schedule in background worker
-        chrome.runtime.sendMessage({ 
-            type: 'scheduleExecution', 
-            scheduledTime: scheduledDateTime.toISOString() 
-        });
-    });
-}
-
-// Clear scheduled time
-function clearSchedule() {
-    chrome.storage.local.set({ [SCHEDULE_KEY]: null }, () => {
-        addLog('Schedule cleared', 'info');
-        document.querySelector('input[name="scheduleType"][value="immediate"]').checked = true;
-        updateScheduleUI();
-        updateStatus();
-        
-        chrome.runtime.sendMessage({ type: 'clearSchedule' });
-    });
-}
-
-// Load scheduled time from storage
-function loadScheduledTime() {
-    chrome.storage.local.get([SCHEDULE_KEY], (result) => {
-        const schedule = result[SCHEDULE_KEY];
-        
-        if (schedule && schedule.enabled) {
-            const scheduledDateTime = new Date(schedule.dateTime);
-            const dateStr = scheduledDateTime.toISOString().split('T')[0];
-            const timeStr = scheduledDateTime.toTimeString().substring(0, 5);
-            
-            executionDate.value = dateStr;
-            executionTime.value = timeStr;
-            
-            document.querySelector('input[name="scheduleType"][value="scheduled"]').checked = true;
-            updateScheduleUI();
-        }
-    });
-}
-
-// Run enlistment immediately
-function runEnlistment() {
-    chrome.storage.local.get([SUBJECTS_KEY], (result) => {
-        const subjects = dedupeSubjectsBySubject(result[SUBJECTS_KEY] || []);
-
-        if ((result[SUBJECTS_KEY] || []).length !== subjects.length) {
-            chrome.storage.local.set({ [SUBJECTS_KEY]: subjects });
-        }
-        
-        if (subjects.length === 0) {
-            addError.textContent = 'Please add at least one subject before running.';
-            return;
-        }
-        
-        addLog('Starting enlistment...', 'info');
-        updateStatus('running');
-        
-        chrome.tabs.query({ url: 'https://archershub.dlsu.edu.ph/*' }, (tabs) => {
-            if (tabs.length === 0) {
-                addLog('ArchersHub tab not found. Open ArchersHub in your browser first.', 'error');
-                updateStatus('error');
-                return;
-            }
-
-            const enlistmentUrl = 'https://archershub.dlsu.edu.ph/Enlistment_V2/Index/2';
-            const enlistmentTab = tabs.find((t) => t.url && (t.url.includes('/Enlistment_V2/Index') || t.url.includes('/Enlistment/Index'))) || tabs[0];
-            const sendRunRequest = (tabId) => {
-                chrome.tabs.sendMessage(tabId, {
-                    type: 'executeEnlistment',
-                    subjects: subjects
-                }, (response) => {
-                    if (chrome.runtime.lastError) {
-                        addLog('Error: Unable to connect to enlistment page. Reload the tab and try again.', 'error');
-                        updateStatus('error');
-                        return;
-                    }
-
-                    if (response && response.success) {
-                        addLog('Enlistment completed successfully!', 'success');
-                        updateStatus('not-running');
-                    } else if (response && response.error) {
-                        addLog('Enlistment failed: ' + response.error, 'error');
-                        updateStatus('error');
-                    }
-                });
-            };
-
-            if (enlistmentTab.url && (enlistmentTab.url.includes('/Enlistment_V2/Index') || enlistmentTab.url.includes('/Enlistment/Index'))) {
-                sendRunRequest(enlistmentTab.id);
-                return;
-            }
-
-            chrome.tabs.update(enlistmentTab.id, { url: enlistmentUrl }, (updatedTab) => {
-                if (chrome.runtime.lastError || !updatedTab) {
-                    addLog('Unable to open the enlistment page. Please try again after opening ArchersHub.', 'error');
-                    updateStatus('error');
-                    return;
-                }
-
-                let handshakeComplete = false;
-                let handshakeTimeoutId = null;
-                const waitForContentScript = setInterval(() => {
-                    chrome.tabs.sendMessage(updatedTab.id, { type: 'ping' }, () => {
-                        if (chrome.runtime.lastError) {
-                            return;
-                        }
-
-                        handshakeComplete = true;
-                        clearInterval(waitForContentScript);
-                        if (handshakeTimeoutId) {
-                            clearTimeout(handshakeTimeoutId);
-                        }
-                        sendRunRequest(updatedTab.id);
-                    });
-                }, 500);
-
-                handshakeTimeoutId = setTimeout(() => {
-                    if (handshakeComplete) {
-                        return;
-                    }
-
-                    clearInterval(waitForContentScript);
-                    addLog('Timed out waiting for the enlistment page to load.', 'error');
-                    updateStatus('error');
-                }, 15000);
-            });
-        });
-    });
-}
-
-// Update status display
-function updateStatus(status = null) {
-    if (status) {
-        statusDiv.className = 'status ' + status;
-        
-        if (status === 'running') {
-            statusText.textContent = '🔄 Running Enlistment...';
-        } else if (status === 'error') {
-            statusText.textContent = '❌ Error Occurred';
-        } else {
-            statusText.textContent = '✓ Ready';
-        }
-    } else {
-        // Check if scheduled
-        chrome.storage.local.get([SCHEDULE_KEY], (result) => {
-            const schedule = result[SCHEDULE_KEY];
-            
-            if (schedule && schedule.enabled) {
-                const scheduledDateTime = new Date(schedule.dateTime);
-                statusDiv.className = 'status scheduled';
-                statusText.textContent = `⏰ Scheduled for ${scheduledDateTime.toLocaleString()}`;
-            } else {
-                statusDiv.className = 'status not-running';
-                statusText.textContent = '✓ Not Scheduled';
-            }
-        });
-    }
-}
-
 // Execution log management
 function addLog(message, type = 'info') {
     const timestamp = new Date().toLocaleTimeString();
@@ -436,20 +206,4 @@ function setupEventListeners() {
 
         removeSubject(subject, section);
     });
-
-    // Listen for messages from background worker
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        if (request.type === 'executionStatus') {
-            if (request.status === 'completed') {
-                addLog('Enlistment completed!', 'success');
-                updateStatus('not-running');
-            } else if (request.status === 'error') {
-                addLog(`Error: ${request.message}`, 'error');
-                updateStatus('error');
-            }
-        }
-    });
-    
-    // Update status every second when popup is open
-    setInterval(updateStatus, 1000);
 }

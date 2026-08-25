@@ -1,5 +1,8 @@
 # ArchersHub Enlistment Automator - Easy User Guide
 
+> [!NOTE]
+> The **Run Now** and **Schedule** (Save Schedule / Clear Schedule) features described later in this guide have been temporarily removed while the extension is being rebuilt. The popup currently only lets you maintain a subject list (add/remove subjects).
+
 This guide is written for non-technical users.
 You do not need coding knowledge to use this.
 

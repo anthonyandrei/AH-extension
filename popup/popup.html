@@ -9,13 +9,6 @@
 <body>
     <div class="container">
         <h1>Enlistment Automator</h1>
-        
-        <!-- Status Section -->
-        <div class="status-section">
-            <div id="status" class="status not-running">
-                <span id="statusText">Not Running</span>
-            </div>
-        </div>
 
         <!-- Add Subject Section -->
         <div class="add-subject-section">
@@ -48,46 +41,6 @@
             <div id="subjectsList" class="subjects-list">
                 <p class="empty-message">No subjects added yet</p>
             </div>
-        </div>
-
-        <!-- Scheduling Section -->
-        <div class="scheduling-section">
-            <h2>Schedule Execution</h2>
-            
-            <div class="schedule-options">
-                <div class="radio-group">
-                    <label class="radio-label">
-                        <input type="radio" name="scheduleType" value="immediate" checked>
-                        Run Immediately
-                    </label>
-                </div>
-                
-                <div class="radio-group">
-                    <label class="radio-label">
-                        <input type="radio" name="scheduleType" value="scheduled">
-                        Schedule for Date & Time
-                    </label>
-                </div>
-            </div>
-
-            <div id="scheduledTimeContainer" class="hidden">
-                <div class="form-group">
-                    <label for="executionDate">Date:</label>
-                    <input type="date" id="executionDate">
-                </div>
-                <div class="form-group">
-                    <label for="executionTime">Time:</label>
-                    <input type="time" id="executionTime">
-                </div>
-                <div id="scheduleError" class="error-message"></div>
-            </div>
-        </div>
-
-        <!-- Action Buttons -->
-        <div class="action-buttons">
-            <button id="runBtn" class="btn btn-success">Run Now</button>
-            <button id="scheduleBtn" class="btn btn-info hidden">Save Schedule</button>
-            <button id="clearScheduleBtn" class="btn btn-secondary hidden">Clear Schedule</button>
         </div>
 
         <!-- Log Section -->
