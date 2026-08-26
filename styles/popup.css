@@ -23,12 +23,8 @@
 
   --r-sm: 5px;
   --r-md: 8px;
-  --r-lg: 12px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-
-  --z-sheet: 40;
-  --z-bar: 60;
 }
 
 *, *::before, *::after {
@@ -71,21 +67,15 @@ body {
   flex: 1;
 }
 
-.hdr .sub {
-  font-size: 11px;
-  color: var(--ink-3);
-  font-weight: 400;
-}
-
 /* ---------- Tabs ---------- */
-.b-tabs, .tabs {
+.b-tabs {
   display: flex;
   gap: 2px;
   padding: 0 10px;
   border-bottom: 1px solid var(--line-soft);
 }
 
-.b-tab, .tab {
+.b-tab {
   appearance: none;
   background: none;
   border: 0;
@@ -97,31 +87,22 @@ body {
   transition: color 150ms var(--ease);
 }
 
-.b-tab:hover, .tab:hover {
+.b-tab:hover {
   color: var(--ink-2);
 }
 
-.b-tab[aria-selected="true"], .tab[aria-selected="true"] {
+.b-tab[aria-selected="true"] {
   color: var(--ink);
   font-weight: 600;
 }
 
-.b-tab[aria-selected="true"]::after, .tab[aria-selected="true"]::after {
+.b-tab[aria-selected="true"]::after {
   content: "";
   position: absolute;
   inset: auto 8px -1px;
   height: 2px;
   background: var(--accent);
   border-radius: 2px 2px 0 0;
-}
-
-.b-tab .pip, .tab .pip {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  margin-left: 5px;
-  vertical-align: 1px;
 }
 
 /* ---------- Panels & Sections ---------- */
@@ -149,13 +130,13 @@ body {
 }
 
 /* ---------- Plan Table ---------- */
-table.b-plan, table.plan-table {
+table.b-plan {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
 }
 
-table.b-plan th, table.plan-table th {
+table.b-plan th {
   text-align: left;
   font-weight: 500;
   font-size: 10.5px;
@@ -164,13 +145,13 @@ table.b-plan th, table.plan-table th {
   border-bottom: 1px solid var(--line-soft);
 }
 
-table.b-plan td, table.plan-table td {
+table.b-plan td {
   padding: 7px 6px 7px 0;
   border-bottom: 1px solid var(--line-soft);
   vertical-align: middle;
 }
 
-table.b-plan tr:last-child td, table.plan-table tr:last-child td {
+table.b-plan tr:last-child td {
   border-bottom: 0;
 }
 
@@ -196,7 +177,7 @@ select.b-sel:focus, select:focus {
   font-size: 10.5px;
 }
 
-.b-x, .btn-remove {
+.b-x {
   appearance: none;
   background: none;
   border: 0;
@@ -207,7 +188,7 @@ select.b-sel:focus, select:focus {
   padding: 2px 0 2px 4px;
 }
 
-.b-x:hover, .btn-remove:hover {
+.b-x:hover {
   color: var(--red);
 }
 
@@ -481,10 +462,9 @@ details.a-more > summary:hover {
 
 .chip[data-tone="idle"]    { background: var(--surface-2); color: var(--ink-2); }
 .chip[data-tone="armed"]   { background: var(--blue-dim);  color: var(--blue); }
-.chip[data-tone="live"]    { background: var(--accent-dim);color: var(--accent); }
+.chip[data-tone="live"], .chip[data-tone="done"] { background: var(--accent-dim); color: var(--accent); }
 .chip[data-tone="warn"]    { background: var(--amber-dim); color: var(--amber); }
 .chip[data-tone="bad"]     { background: var(--red-dim);   color: var(--red); }
-.chip[data-tone="done"]    { background: var(--accent-dim);color: var(--accent); }
 
 .chip .live-dot {
   animation: pulse 2.4s var(--ease) infinite;
