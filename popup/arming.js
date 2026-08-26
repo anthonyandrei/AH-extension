@@ -3,15 +3,11 @@
  */
 
 import { extractShellParams } from './catalogue.js';
-import { appendLedgerEntry } from './reporting.js';
+import { appendLedgerEntry, pad2 } from './reporting.js';
 import { ensureOwnedTab, steerOwnedTab } from './tab-manager.js';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-function pad2(n) {
-  return String(n).padStart(2, '0');
-}
 
 /**
  * Creates a Vigil record object conforming to the SPEC storage schema.

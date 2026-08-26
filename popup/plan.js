@@ -1,4 +1,4 @@
-function idEquals(a, b) {
+export function idEquals(a, b) {
   return a === b || String(a) === String(b);
 }
 
@@ -17,6 +17,22 @@ export function emptyPlan() {
 }
 
 /**
+ * Normalizes a Plan object with guaranteed field defaults.
+ *
+ * @param {{ academicSessionId?: string|null, subjects?: Array, startMode?: string, startTime?: string|null }|null|undefined} plan
+ * @returns {{ academicSessionId: string|null, subjects: Array, startMode: string, startTime: string|null }}
+ */
+export function normalizePlan(plan) {
+  const currentPlan = plan || emptyPlan();
+  return {
+    academicSessionId: currentPlan.academicSessionId ?? null,
+    subjects: Array.isArray(currentPlan.subjects) ? currentPlan.subjects : [],
+    startMode: currentPlan.startMode !== undefined ? currentPlan.startMode : 'at-time',
+    startTime: currentPlan.startTime !== undefined ? currentPlan.startTime : null,
+  };
+}
+
+/**
  * Appends a new subject row to the plan if not already present.
  *
  * @param {{ academicSessionId?: string|null, subjects?: Array, startMode?: string, startTime?: string|null }} plan
@@ -25,10 +41,8 @@ export function emptyPlan() {
  * @returns {{ academicSessionId: string|null, subjects: Array, startMode: string, startTime: string|null }}
  */
 export function addSubject(plan, course, section) {
-  const currentPlan = plan || emptyPlan();
-  const subjects = Array.isArray(currentPlan.subjects) ? currentPlan.subjects : [];
-  const startMode = currentPlan.startMode !== undefined ? currentPlan.startMode : 'at-time';
-  const startTime = currentPlan.startTime !== undefined ? currentPlan.startTime : null;
+  const normalized = normalizePlan(plan);
+  const subjects = [...normalized.subjects];
 
   if (
     !course ||
@@ -38,23 +52,13 @@ export function addSubject(plan, course, section) {
     section.sectionCreationId === undefined ||
     section.sectionCreationId === null
   ) {
-    return {
-      academicSessionId: currentPlan.academicSessionId ?? null,
-      subjects: [...subjects],
-      startMode,
-      startTime,
-    };
+    return { ...normalized, subjects };
   }
 
   const exists = subjects.some((s) => idEquals(s.courseCreationId, course.courseCreationId));
 
   if (exists) {
-    return {
-      academicSessionId: currentPlan.academicSessionId ?? null,
-      subjects: [...subjects],
-      startMode,
-      startTime,
-    };
+    return { ...normalized, subjects };
   }
 
   const newSubject = {
@@ -65,10 +69,8 @@ export function addSubject(plan, course, section) {
   };
 
   return {
-    academicSessionId: currentPlan.academicSessionId ?? null,
+    ...normalized,
     subjects: [...subjects, newSubject],
-    startMode,
-    startTime,
   };
 }
 
@@ -80,16 +82,10 @@ export function addSubject(plan, course, section) {
  * @returns {{ academicSessionId: string|null, subjects: Array, startMode: string, startTime: string|null }}
  */
 export function removeSubject(plan, courseCreationId) {
-  const currentPlan = plan || emptyPlan();
-  const subjects = Array.isArray(currentPlan.subjects) ? currentPlan.subjects : [];
-  const startMode = currentPlan.startMode !== undefined ? currentPlan.startMode : 'at-time';
-  const startTime = currentPlan.startTime !== undefined ? currentPlan.startTime : null;
-
+  const normalized = normalizePlan(plan);
   return {
-    academicSessionId: currentPlan.academicSessionId ?? null,
-    subjects: subjects.filter((s) => !idEquals(s.courseCreationId, courseCreationId)),
-    startMode,
-    startTime,
+    ...normalized,
+    subjects: normalized.subjects.filter((s) => !idEquals(s.courseCreationId, courseCreationId)),
   };
 }
 
@@ -102,14 +98,10 @@ export function removeSubject(plan, courseCreationId) {
  * @returns {{ academicSessionId: string|null, subjects: Array, startMode: string, startTime: string|null }}
  */
 export function setWantedSection(plan, courseCreationId, section) {
-  const currentPlan = plan || emptyPlan();
-  const subjects = Array.isArray(currentPlan.subjects) ? currentPlan.subjects : [];
-  const startMode = currentPlan.startMode !== undefined ? currentPlan.startMode : 'at-time';
-  const startTime = currentPlan.startTime !== undefined ? currentPlan.startTime : null;
-
+  const normalized = normalizePlan(plan);
   return {
-    academicSessionId: currentPlan.academicSessionId ?? null,
-    subjects: subjects.map((s) => {
+    ...normalized,
+    subjects: normalized.subjects.map((s) => {
       if (idEquals(s.courseCreationId, courseCreationId)) {
         return {
           ...s,
@@ -119,8 +111,6 @@ export function setWantedSection(plan, courseCreationId, section) {
       }
       return { ...s };
     }),
-    startMode,
-    startTime,
   };
 }
 

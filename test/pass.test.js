@@ -16,6 +16,8 @@ import {
   recordAcquisitionsAndUpgrades,
   checkStall,
   handleStall,
+  checkAndHandleStall,
+  finalizePass,
   DISPOSITIONS,
 } from '../popup/pass.js';
 import { PAGE_STATES } from '../content/classifier.js';
@@ -2274,6 +2276,106 @@ describe('pass module', () => {
       assert.equal(store.passTail.length, 1);
       assert.equal(store.passTail[0].complete, false);
       assert.match(store.passTail[0].summary, /stall/i);
+    });
+  });
+
+  describe('checkAndHandleStall helper', () => {
+    it('returns null when stall threshold has not been reached', async () => {
+      const now = 1756180000000;
+      const storage = createMockStorage();
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+
+      const result = await checkAndHandleStall({
+        lastCompletePassAt: now - 300000,
+        startedAt: now - 300000,
+        now,
+        thresholdMs: 600000,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        vigil: { state: 'watching', lastChangeAt: now - 300000 },
+        cause: 'test stall',
+        state: PAGE_STATES.STEP2_BOUND,
+      });
+
+      assert.equal(result, null);
+      assert.equal(storage._getStore().vigil, undefined);
+    });
+
+    it('handles stall, triggers alert, and returns formatted result when threshold is exceeded', async () => {
+      const now = 1756180000000;
+      const storage = createMockStorage({ vigil: { state: 'watching' }, passTail: [] });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const notifications = createMockNotifications();
+
+      const result = await checkAndHandleStall({
+        lastCompletePassAt: now - 650000,
+        startedAt: now - 650000,
+        now,
+        thresholdMs: 600000,
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        notificationsApi: notifications,
+        vigil: { state: 'watching', lastChangeAt: now - 650000 },
+        cause: 'Page state NoTab — 10 minutes without a complete pass',
+        state: PAGE_STATES.NO_TAB,
+        extraResult: { reason: 'stall' },
+      });
+
+      assert.deepStrictEqual(result, {
+        isComplete: false,
+        state: 'stall',
+        reason: 'stall',
+      });
+      assert.equal(storage._getStore().vigil.state, 'stall');
+      assert.equal(action._getBadge().text, '!!');
+    });
+  });
+
+  describe('finalizePass helper', () => {
+    it('computes jittered delay, updates vigil nextFireTime, stores payload, appends pass tail, and creates alarm', async () => {
+      const now = 1756180000000;
+      const vigil = { state: 'watching', lastChangeAt: now, rateLimited: false };
+      const storage = createMockStorage({ passTail: [] });
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+
+      const result = await finalizePass({
+        vigil,
+        now,
+        storagePayload: { customKey: 'customValue' },
+        badgeState: { state: 'watching', unresolvedCount: 2 },
+        passRecord: {
+          state: PAGE_STATES.STEP2_BOUND,
+          complete: true,
+          summary: 'Step2Bound: 2 watching',
+        },
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+        result: { isComplete: true, state: 'watching' },
+      });
+
+      assert.deepStrictEqual(result, { isComplete: true, state: 'watching' });
+      assert.ok(typeof vigil.nextFireTime === 'number' && vigil.nextFireTime > now);
+
+      const store = storage._getStore();
+      assert.equal(store.customKey, 'customValue');
+      assert.deepStrictEqual(store.vigil, vigil);
+      assert.equal(store.passTail.length, 1);
+      assert.equal(store.passTail[0].state, PAGE_STATES.STEP2_BOUND);
+      assert.equal(store.passTail[0].complete, true);
+      assert.ok(typeof store.passTail[0].interval === 'number');
+
+      assert.equal(action._getBadge().text, '2');
+      const passAlarm = await alarms.get('vigil_pass');
+      assert.ok(passAlarm);
+      assert.ok(passAlarm.delayInMinutes > 0);
     });
   });
 

@@ -9,6 +9,7 @@ import { readCatalogue } from './catalogue.js';
 import { updateBadge } from './arming.js';
 import { appendLedgerEntry, resolveActiveAlert } from './reporting.js';
 import { steerOwnedTab, handleLoggedOutSuspend, handleUnrecognisedAbort } from './tab-manager.js';
+import { idEquals } from './plan.js';
 
 export const DISPOSITIONS = Object.freeze({
   ACQUIRE: 'acquire',
@@ -18,10 +19,6 @@ export const DISPOSITIONS = Object.freeze({
   HELD_DIFF_ABSENT: 'held_diff_absent',
   PRESERVE: 'preserve',
 });
-
-function idEquals(a, b) {
-  return a === b || String(a) === String(b);
-}
 
 /**
  * Computes base cadence interval in ms derived purely from stored lastChangeAt.
@@ -175,6 +172,59 @@ export async function handleStall({
   await appendPassTail({ passRecord, storageApi });
 
   return updatedVigil;
+}
+
+/**
+ * Evaluates stall condition and dispatches handleStall if threshold is reached.
+ *
+ * @param {{
+ *   lastCompletePassAt?: number|null,
+ *   startedAt?: number|null,
+ *   now?: number,
+ *   thresholdMs?: number,
+ *   storageApi?: object,
+ *   alarmsApi?: object,
+ *   actionApi?: object,
+ *   notificationsApi?: object,
+ *   vigil?: object,
+ *   cause?: string,
+ *   state?: string,
+ *   extraResult?: object
+ * }} params
+ * @returns {Promise<object|null>} Stall result if stalled, null otherwise
+ */
+export async function checkAndHandleStall({
+  lastCompletePassAt,
+  startedAt,
+  now = Date.now(),
+  thresholdMs,
+  storageApi,
+  alarmsApi,
+  actionApi,
+  notificationsApi,
+  vigil,
+  cause,
+  state = PAGE_STATES.STEP2_BOUND,
+  extraResult = {},
+}) {
+  if (checkStall({ lastCompletePassAt, startedAt, now, thresholdMs })) {
+    await handleStall({
+      storageApi,
+      alarmsApi,
+      actionApi,
+      notificationsApi,
+      vigil,
+      now,
+      cause,
+      state,
+    });
+    return {
+      isComplete: false,
+      state: 'stall',
+      ...extraResult,
+    };
+  }
+  return null;
 }
 
 /**
@@ -785,6 +835,76 @@ export async function handlePassCompletion({
 }
 
 /**
+ * Computes the next pass delay, updates vigil nextFireTime, persists state to storage,
+ * updates action badge if requested, appends a pass record to passTail, and schedules the next vigil_pass alarm.
+ *
+ * @param {{
+ *   vigil?: object,
+ *   now?: number,
+ *   storagePayload?: object,
+ *   badgeState?: { state: string, unresolvedCount?: number },
+ *   passRecord?: object,
+ *   storageApi?: object,
+ *   alarmsApi?: object,
+ *   actionApi?: object,
+ *   result?: object
+ * }} params
+ * @returns {Promise<object>} The pass result
+ */
+export async function finalizePass({
+  vigil,
+  now = Date.now(),
+  storagePayload = {},
+  badgeState,
+  passRecord = {},
+  storageApi,
+  alarmsApi,
+  actionApi,
+  result = {},
+}) {
+  const nextDelay = computeNextPassDelay({
+    lastChangeAt: vigil?.lastChangeAt,
+    now,
+    rateLimited: vigil?.rateLimited,
+  });
+
+  if (vigil) {
+    vigil.nextFireTime = now + nextDelay;
+  }
+
+  if (storageApi?.set) {
+    const payload = {
+      ...(vigil ? { vigil } : {}),
+      ...storagePayload,
+    };
+    await storageApi.set(payload);
+  }
+
+  if (badgeState && actionApi) {
+    updateBadge({
+      state: badgeState.state,
+      unresolvedCount: badgeState.unresolvedCount,
+      actionApi,
+    });
+  }
+
+  const completeRecord = {
+    id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
+    timestamp: now,
+    interval: nextDelay,
+    ...passRecord,
+  };
+
+  await appendPassTail({ passRecord: completeRecord, storageApi });
+
+  if (alarmsApi?.create) {
+    alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
+  }
+
+  return result;
+}
+
+/**
  * Executes a single Pass per SPEC §7, runs reconciliation on Step2Bound, updates storage & badge,
  * appends to passTail, and schedules the next pass tick.
  *
@@ -879,42 +999,35 @@ export async function executePass({
     }
 
     // Check Stall Clock for prolonged non-Step2Bound conditions
-    if (checkStall({ lastCompletePassAt, startedAt: vigil.startedAt, now })) {
-      await handleStall({
-        storageApi,
-        alarmsApi,
-        actionApi,
-        notificationsApi,
-        vigil,
-        now,
-        cause: `Page state ${pageState} — 10 minutes without a complete pass`,
-        state: pageState,
-      });
-      return { isComplete: false, state: 'stall', reason: 'stall' };
-    }
-
-    const nextDelay = computeNextPassDelay({
-      lastChangeAt: vigil.lastChangeAt,
+    const stallResult = await checkAndHandleStall({
+      lastCompletePassAt,
+      startedAt: vigil.startedAt,
       now,
-      rateLimited: vigil.rateLimited,
-    });
-
-    const passRecord = {
-      id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
-      timestamp: now,
+      storageApi,
+      alarmsApi,
+      actionApi,
+      notificationsApi,
+      vigil,
+      cause: `Page state ${pageState} — 10 minutes without a complete pass`,
       state: pageState,
-      complete: false,
-      interval: nextDelay,
-      summary: `Page state ${pageState} — non-complete pass`,
-    };
-
-    await appendPassTail({ passRecord, storageApi });
-
-    if (alarmsApi?.create) {
-      alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
+      extraResult: { reason: 'stall' },
+    });
+    if (stallResult) {
+      return stallResult;
     }
 
-    return { isComplete: false, state: pageState };
+    return finalizePass({
+      vigil,
+      now,
+      passRecord: {
+        state: pageState,
+        complete: false,
+        summary: `Page state ${pageState} — non-complete pass`,
+      },
+      storageApi,
+      alarmsApi,
+      result: { isComplete: false, state: pageState },
+    });
   }
 
   // 3. Step2Bound reached: Read catalogue over HTTP scoped to requested subjects
@@ -930,18 +1043,21 @@ export async function executePass({
     const errorStatus = catalogue?.status;
 
     if (errorStatus === 429 || errorStatus === 403 || errorStatus === 500) {
-      if (checkStall({ lastCompletePassAt, startedAt: vigil.startedAt, now })) {
-        await handleStall({
-          storageApi,
-          alarmsApi,
-          actionApi,
-          notificationsApi,
-          vigil,
-          now,
-          cause: `HTTP ${errorStatus} response — 10 minutes without a complete pass`,
-          state: PAGE_STATES.STEP2_BOUND,
-        });
-        return { isComplete: false, state: 'stall', error: errorStatus };
+      const stallResult = await checkAndHandleStall({
+        lastCompletePassAt,
+        startedAt: vigil.startedAt,
+        now,
+        storageApi,
+        alarmsApi,
+        actionApi,
+        notificationsApi,
+        vigil,
+        cause: `HTTP ${errorStatus} response — 10 minutes without a complete pass`,
+        state: PAGE_STATES.STEP2_BOUND,
+        extraResult: { error: errorStatus },
+      });
+      if (stallResult) {
+        return stallResult;
       }
 
       const updatedVigil = { ...vigil };
@@ -949,50 +1065,37 @@ export async function executePass({
         updatedVigil.rateLimited = true;
       }
 
-      const nextDelay = computeNextPassDelay({
-        lastChangeAt: updatedVigil.lastChangeAt,
+      return finalizePass({
+        vigil: updatedVigil,
         now,
-        rateLimited: updatedVigil.rateLimited,
+        passRecord: {
+          state: PAGE_STATES.STEP2_BOUND,
+          complete: false,
+          error: errorStatus,
+          summary: `HTTP Error ${errorStatus} — treated as ${errorStatus === 500 ? 'no-change' : 'rate-limited'}`,
+        },
+        storageApi,
+        alarmsApi,
+        result: { isComplete: false, error: errorStatus },
       });
-
-      updatedVigil.nextFireTime = now + nextDelay;
-
-      if (storageApi?.set) {
-        await storageApi.set({ vigil: updatedVigil });
-      }
-
-      const passRecord = {
-        id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
-        timestamp: now,
-        state: PAGE_STATES.STEP2_BOUND,
-        complete: false,
-        error: errorStatus,
-        interval: nextDelay,
-        summary: `HTTP Error ${errorStatus} — treated as ${errorStatus === 500 ? 'no-change' : 'rate-limited'}`,
-      };
-
-      await appendPassTail({ passRecord, storageApi });
-
-      if (alarmsApi?.create) {
-        alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
-      }
-
-      return { isComplete: false, error: errorStatus };
     }
 
     if (catalogue?.error) {
-      if (checkStall({ lastCompletePassAt, startedAt: vigil.startedAt, now })) {
-        await handleStall({
-          storageApi,
-          alarmsApi,
-          actionApi,
-          notificationsApi,
-          vigil,
-          now,
-          cause: `Read failed (${catalogue.error}) — 10 minutes without a complete pass`,
-          state: PAGE_STATES.STEP2_BOUND,
-        });
-        return { isComplete: false, state: 'stall', error: catalogue.error };
+      const stallResult = await checkAndHandleStall({
+        lastCompletePassAt,
+        startedAt: vigil.startedAt,
+        now,
+        storageApi,
+        alarmsApi,
+        actionApi,
+        notificationsApi,
+        vigil,
+        cause: `Read failed (${catalogue.error}) — 10 minutes without a complete pass`,
+        state: PAGE_STATES.STEP2_BOUND,
+        extraResult: { error: catalogue.error },
+      });
+      if (stallResult) {
+        return stallResult;
       }
     }
 
@@ -1109,70 +1212,55 @@ export async function executePass({
     // If Save Gate refused or strike could not click
     if (!strikeResponse?.clicked) {
       // Check Stall Clock for Save Gate refusal
-      if (checkStall({ lastCompletePassAt, startedAt: vigil.startedAt, now })) {
-        await handleStall({
-          storageApi,
-          alarmsApi,
-          actionApi,
-          notificationsApi,
-          vigil,
-          now,
-          cause: `Save Gate refused: ${strikeResponse?.reason || 'unapproved'} — 10 minutes without a complete pass`,
-          state: PAGE_STATES.STEP2_BOUND,
-        });
-        return {
-          isComplete: false,
-          state: 'stall',
+      const stallResult = await checkAndHandleStall({
+        lastCompletePassAt,
+        startedAt: vigil.startedAt,
+        now,
+        storageApi,
+        alarmsApi,
+        actionApi,
+        notificationsApi,
+        vigil,
+        cause: `Save Gate refused: ${strikeResponse?.reason || 'unapproved'} — 10 minutes without a complete pass`,
+        state: PAGE_STATES.STEP2_BOUND,
+        extraResult: {
           strikePerformed: false,
           saveGateApproved: false,
           reason: strikeResponse?.reason,
           reconciliation,
-        };
+        },
+      });
+      if (stallResult) {
+        return stallResult;
       }
 
-      const nextDelay = computeNextPassDelay({
-        lastChangeAt: updatedVigil.lastChangeAt,
+      return finalizePass({
+        vigil: updatedVigil,
         now,
-        rateLimited: updatedVigil.rateLimited,
-      });
-
-      updatedVigil.nextFireTime = now + nextDelay;
-
-      if (storageApi?.set) {
-        await storageApi.set({
-          vigil: updatedVigil,
+        storagePayload: {
           reconciliation,
           lastHeldSnapshot: currentHeldSnapshot,
           lastSectionsSnapshot: currentSectionsSnapshot,
-        });
-      }
-
-      const passRecord = {
-        id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
-        timestamp: now,
-        state: PAGE_STATES.STEP2_BOUND,
-        complete: false,
-        interval: nextDelay,
-        unresolvedCount: reconciliation.unresolvedCount,
-        allSatisfied: false,
-        dispositions: reconciliation.dispositions,
-        summary: `Save Gate refused: ${strikeResponse?.reason || 'unapproved'}`,
-      };
-
-      await appendPassTail({ passRecord, storageApi });
-
-      if (alarmsApi?.create) {
-        alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
-      }
-
-      return {
-        isComplete: false,
-        state: 'watching',
-        strikePerformed: false,
-        saveGateApproved: false,
-        reason: strikeResponse?.reason,
-        reconciliation,
-      };
+        },
+        passRecord: {
+          state: PAGE_STATES.STEP2_BOUND,
+          complete: false,
+          unresolvedCount: reconciliation.unresolvedCount,
+          allSatisfied: false,
+          dispositions: reconciliation.dispositions,
+          summary: `Save Gate refused: ${strikeResponse?.reason || 'unapproved'}`,
+        },
+        storageApi,
+        alarmsApi,
+        result: {
+          isComplete: false,
+          state: 'watching',
+          strikePerformed: false,
+          saveGateApproved: false,
+          reason: strikeResponse?.reason,
+          reconciliation,
+        },
+      });
     }
 
     // Strike clicked! #btnEnlistment was clicked once.
@@ -1193,64 +1281,47 @@ export async function executePass({
       if (errorStatus === 429 || errorStatus === 403) {
         updatedVigil.rateLimited = true;
       }
-
-      const nextDelay = computeNextPassDelay({
-        lastChangeAt: updatedVigil.lastChangeAt,
-        now,
-        rateLimited: updatedVigil.rateLimited,
-      });
-
-      updatedVigil.nextFireTime = now + nextDelay;
       updatedVigil.previousHeldSnapshot = currentHeldSnapshot;
       updatedVigil.previousSectionsSnapshot = currentSectionsSnapshot;
 
-      if (storageApi?.set) {
-        await storageApi.set({
-          vigil: updatedVigil,
+      return finalizePass({
+        vigil: updatedVigil,
+        now,
+        storagePayload: {
           reconciliation,
           lastHeldSnapshot: currentHeldSnapshot,
           lastSectionsSnapshot: currentSectionsSnapshot,
-        });
-      }
-
-      updateBadge({
-        state: 'watching',
-        unresolvedCount: reconciliation.unresolvedCount,
+        },
+        badgeState: {
+          state: 'watching',
+          unresolvedCount: reconciliation.unresolvedCount,
+        },
+        passRecord: {
+          state: PAGE_STATES.STEP2_BOUND,
+          complete: false,
+          strikePerformed: true,
+          verified: false,
+          unresolvedCount: reconciliation.unresolvedCount,
+          allSatisfied: false,
+          dispositions: reconciliation.dispositions,
+          error: errorStatus || postCatalogue?.error || 'post_write_read_failed',
+          summary: 'Strike executed — post-write catalogue read failed (unverified)',
+        },
+        storageApi,
+        alarmsApi,
         actionApi,
+        result: {
+          isComplete: false,
+          state: 'watching',
+          strikePerformed: true,
+          verified: false,
+          unresolvedCount: reconciliation.unresolvedCount,
+          allSatisfied: false,
+          reason: 'post_write_read_failed',
+          error: errorStatus || postCatalogue?.error,
+          reconciliation,
+        },
       });
-
-      const passRecord = {
-        id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
-        timestamp: now,
-        state: PAGE_STATES.STEP2_BOUND,
-        complete: false,
-        strikePerformed: true,
-        verified: false,
-        interval: nextDelay,
-        unresolvedCount: reconciliation.unresolvedCount,
-        allSatisfied: false,
-        dispositions: reconciliation.dispositions,
-        error: errorStatus || postCatalogue?.error || 'post_write_read_failed',
-        summary: 'Strike executed — post-write catalogue read failed (unverified)',
-      };
-
-      await appendPassTail({ passRecord, storageApi });
-
-      if (alarmsApi?.create) {
-        alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
-      }
-
-      return {
-        isComplete: false,
-        state: 'watching',
-        strikePerformed: true,
-        verified: false,
-        unresolvedCount: reconciliation.unresolvedCount,
-        allSatisfied: false,
-        reason: 'post_write_read_failed',
-        error: errorStatus || postCatalogue?.error,
-        reconciliation,
-      };
     }
 
     // Post-write read succeeded: verify new state against postCatalogue.courses
@@ -1307,24 +1378,6 @@ export async function executePass({
     }
 
     // Strike performed, but still watching some subjects
-    const nextDelay = computeNextPassDelay({
-      lastChangeAt: updatedVigil.lastChangeAt,
-      now,
-      rateLimited: updatedVigil.rateLimited,
-    });
-
-    updatedVigil.nextFireTime = now + nextDelay;
-
-    if (storageApi?.set) {
-      await storageApi.set({
-        vigil: updatedVigil,
-        lastCompletePassAt: now,
-        reconciliation: postReconciliation,
-        lastHeldSnapshot: postHeldSnapshot,
-        lastSectionsSnapshot: postSectionsSnapshot,
-      });
-    }
-
     // Immediately steer Owned Tab back to Step 2 for subsequent passes (with updated reconciliation)
     if (tabsApi && ownedTabId) {
       try {
@@ -1342,92 +1395,76 @@ export async function executePass({
       } catch (_) {}
     }
 
-    updateBadge({
-      state: 'watching',
-      unresolvedCount: postReconciliation.unresolvedCount,
+    return finalizePass({
+      vigil: updatedVigil,
+      now,
+      storagePayload: {
+        lastCompletePassAt: now,
+        reconciliation: postReconciliation,
+        lastHeldSnapshot: postHeldSnapshot,
+        lastSectionsSnapshot: postSectionsSnapshot,
+      },
+      badgeState: {
+        state: 'watching',
+        unresolvedCount: postReconciliation.unresolvedCount,
+      },
+      passRecord: {
+        state: PAGE_STATES.STEP2_BOUND,
+        complete: true,
+        strikePerformed: true,
+        verified: true,
+        unresolvedCount: postReconciliation.unresolvedCount,
+        allSatisfied: false,
+        dispositions: postReconciliation.dispositions,
+        summary: `Strike executed: ${postReconciliation.unresolvedCount} watching`,
+      },
+      storageApi,
+      alarmsApi,
       actionApi,
+      result: {
+        isComplete: true,
+        state: 'watching',
+        strikePerformed: true,
+        verified: true,
+        unresolvedCount: postReconciliation.unresolvedCount,
+        allSatisfied: false,
+        reconciliation: postReconciliation,
+      },
     });
-
-    const passRecord = {
-      id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
-      timestamp: now,
-      state: PAGE_STATES.STEP2_BOUND,
-      complete: true,
-      strikePerformed: true,
-      verified: true,
-      interval: nextDelay,
-      unresolvedCount: postReconciliation.unresolvedCount,
-      allSatisfied: false,
-      dispositions: postReconciliation.dispositions,
-      summary: `Strike executed: ${postReconciliation.unresolvedCount} watching`,
-    };
-
-    await appendPassTail({ passRecord, storageApi });
-
-    if (alarmsApi?.create) {
-      alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
-    }
-
-    return {
-      isComplete: true,
-      state: 'watching',
-      strikePerformed: true,
-      verified: true,
-      unresolvedCount: postReconciliation.unresolvedCount,
-      allSatisfied: false,
-      reconciliation: postReconciliation,
-    };
   }
 
   // 8. No Actionable Dispositions (watching, sections still full): Update badge, record pass, schedule next tick
-  const nextDelay = computeNextPassDelay({
-    lastChangeAt: updatedVigil.lastChangeAt,
+  return finalizePass({
+    vigil: updatedVigil,
     now,
-    rateLimited: updatedVigil.rateLimited,
-  });
-
-  updatedVigil.nextFireTime = now + nextDelay;
-
-  if (storageApi?.set) {
-    await storageApi.set({
-      vigil: updatedVigil,
+    storagePayload: {
       lastCompletePassAt: now,
       reconciliation,
       lastHeldSnapshot: currentHeldSnapshot,
       lastSectionsSnapshot: currentSectionsSnapshot,
-    });
-  }
-
-  updateBadge({
-    state: 'watching',
-    unresolvedCount: reconciliation.unresolvedCount,
+    },
+    badgeState: {
+      state: 'watching',
+      unresolvedCount: reconciliation.unresolvedCount,
+    },
+    passRecord: {
+      state: PAGE_STATES.STEP2_BOUND,
+      complete: true,
+      unresolvedCount: reconciliation.unresolvedCount,
+      allSatisfied: false,
+      dispositions: reconciliation.dispositions,
+      summary: `Step2Bound: ${reconciliation.unresolvedCount} watching`,
+    },
+    storageApi,
+    alarmsApi,
     actionApi,
+    result: {
+      isComplete: true,
+      state: 'watching',
+      unresolvedCount: reconciliation.unresolvedCount,
+      allSatisfied: false,
+      reconciliation,
+    },
   });
-
-  const passRecord = {
-    id: `pass_${now}_${Math.random().toString(36).slice(2, 7)}`,
-    timestamp: now,
-    state: PAGE_STATES.STEP2_BOUND,
-    complete: true,
-    interval: nextDelay,
-    unresolvedCount: reconciliation.unresolvedCount,
-    allSatisfied: false,
-    dispositions: reconciliation.dispositions,
-    summary: `Step2Bound: ${reconciliation.unresolvedCount} watching`,
-  };
-
-  await appendPassTail({ passRecord, storageApi });
-
-  if (alarmsApi?.create) {
-    alarmsApi.create('vigil_pass', { delayInMinutes: Math.max(0.01, nextDelay / 60000) });
-  }
-
-  return {
-    isComplete: true,
-    state: 'watching',
-    unresolvedCount: reconciliation.unresolvedCount,
-    allSatisfied: false,
-    reconciliation,
-  };
 }
 

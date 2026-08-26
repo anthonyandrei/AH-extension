@@ -1,7 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  idEquals,
   emptyPlan,
+  normalizePlan,
   addSubject,
   removeSubject,
   setWantedSection,
@@ -12,6 +14,23 @@ import {
 import { getVigilPresentation, openExternalUrl } from '../popup/popup.js';
 
 describe('plan module', () => {
+  describe('idEquals', () => {
+    it('returns true when values are strictly equal', () => {
+      assert.equal(idEquals('123', '123'), true);
+      assert.equal(idEquals(123, 123), true);
+    });
+
+    it('returns true when numeric and string representations match', () => {
+      assert.equal(idEquals(123, '123'), true);
+      assert.equal(idEquals('123', 123), true);
+    });
+
+    it('returns false when values differ', () => {
+      assert.equal(idEquals('123', '456'), false);
+      assert.equal(idEquals(123, 456), false);
+    });
+  });
+
   describe('emptyPlan', () => {
     it('returns a fresh empty plan object shaped { academicSessionId: null, subjects: [], startMode: "at-time", startTime: null }', () => {
       const plan = emptyPlan();
@@ -29,6 +48,46 @@ describe('plan module', () => {
       assert.deepStrictEqual(plan1, plan2);
       assert.notEqual(plan1, plan2);
       assert.notEqual(plan1.subjects, plan2.subjects);
+    });
+  });
+
+  describe('normalizePlan', () => {
+    it('normalizes null or undefined into empty plan shape', () => {
+      assert.deepStrictEqual(normalizePlan(null), {
+        academicSessionId: null,
+        subjects: [],
+        startMode: 'at-time',
+        startTime: null,
+      });
+      assert.deepStrictEqual(normalizePlan(undefined), {
+        academicSessionId: null,
+        subjects: [],
+        startMode: 'at-time',
+        startTime: null,
+      });
+    });
+
+    it('normalizes partial plan objects preserving provided values and defaulting missing fields', () => {
+      const partial = {
+        academicSessionId: '2026-T1',
+        subjects: [{ courseCreationId: 'c1', sectionCreationId: 's1' }],
+      };
+      assert.deepStrictEqual(normalizePlan(partial), {
+        academicSessionId: '2026-T1',
+        subjects: [{ courseCreationId: 'c1', sectionCreationId: 's1' }],
+        startMode: 'at-time',
+        startTime: null,
+      });
+    });
+
+    it('handles non-array subjects by defaulting to empty array', () => {
+      const invalid = { subjects: 'not-an-array', startMode: 'now' };
+      assert.deepStrictEqual(normalizePlan(invalid), {
+        academicSessionId: null,
+        subjects: [],
+        startMode: 'now',
+        startTime: null,
+      });
     });
   });
 

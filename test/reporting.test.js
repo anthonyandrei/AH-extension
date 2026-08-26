@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  pad2,
   formatEventTime,
   filterLedgerEntries,
   appendLedgerEntry,
@@ -81,6 +82,20 @@ function createMockNotifications() {
 }
 
 describe('reporting module', () => {
+  describe('pad2', () => {
+    it('pads single-digit numbers and strings with a leading zero', () => {
+      assert.equal(pad2(5), '05');
+      assert.equal(pad2('7'), '07');
+      assert.equal(pad2(0), '00');
+    });
+
+    it('leaves two-digit or larger numbers unchanged as strings', () => {
+      assert.equal(pad2(12), '12');
+      assert.equal(pad2('24'), '24');
+      assert.equal(pad2(100), '100');
+    });
+  });
+
   describe('formatEventTime', () => {
     it('formats a timestamp into HH:mm format with zero padding', () => {
       const d = new Date(2026, 7, 25, 7, 5, 0);
