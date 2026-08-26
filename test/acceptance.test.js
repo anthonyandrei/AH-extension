@@ -1228,11 +1228,21 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
       const now = 1756180000000;
       const startTime = '2026-08-26T07:00:00.000Z';
 
+      const mockFetchLoggedIn = async () => ({
+        ok: true,
+        text: async () => `
+          <input id="hdfAcademicSessionId" value="44" />
+          <input id="hdfRuleAllocationId" value="12" />
+          <input id="hdfEnlistmentRuleId" value="34" />
+        `,
+      });
+
       const result = await armVigil({
         plan: { subjects: [{ courseCreationId: 1, sectionCreationId: 1, courseCode: 'CC', sectionCode: 'SS' }], startMode: 'at-time', startTime },
         startMode: 'at-time',
         startTime,
         catalogue: { loggedIn: true },
+        fetchImpl: mockFetchLoggedIn,
         storageApi: storage,
         alarmsApi: alarms,
         actionApi: action,
@@ -1445,11 +1455,21 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
       const action = createMockAction();
       const now = 1756180000000;
 
+      const mockFetchLoggedIn = async () => ({
+        ok: true,
+        text: async () => `
+          <input id="hdfAcademicSessionId" value="44" />
+          <input id="hdfRuleAllocationId" value="12" />
+          <input id="hdfEnlistmentRuleId" value="34" />
+        `,
+      });
+
       const armResult = await armVigil({
         plan,
         startMode: plan.startMode,
         startTime: plan.startTime,
         catalogue: { loggedIn: true },
+        fetchImpl: mockFetchLoggedIn,
         storageApi: storage,
         alarmsApi: alarms,
         actionApi: action,

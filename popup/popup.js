@@ -696,7 +696,6 @@ if (armBtn) {
         plan: currentPlan,
         startMode,
         startTime: startTimeInput?.value,
-        catalogue: { loggedIn: true },
         storageApi: { set: storageSet, get: storageGet },
         alarmsApi: typeof chrome !== "undefined" ? chrome?.alarms : null,
         actionApi: typeof chrome !== "undefined" ? chrome?.action : null,

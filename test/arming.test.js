@@ -389,6 +389,15 @@ describe('arming module', () => {
       ],
     };
 
+    const mockFetchLoggedIn = async () => ({
+      ok: true,
+      text: async () => `
+        <input type="hidden" id="hdfAcademicSessionId" value="2025-T1" />
+        <input type="hidden" id="hdfRuleAllocationId" value="123" />
+        <input type="hidden" id="hdfEnlistmentRuleId" value="456" />
+      `,
+    });
+
     it('refuses to arm against a logged-out session and does NOT write an armed record', async () => {
       const storage = createMockStorage();
       const alarms = createMockAlarms();
@@ -398,6 +407,32 @@ describe('arming module', () => {
         plan: validPlan,
         startMode: 'now',
         catalogue: { loggedIn: false },
+        fetchImpl: async () => ({ ok: true, text: async () => '<html><title>Login</title></html>' }),
+        storageApi: storage,
+        alarmsApi: alarms,
+        actionApi: action,
+      });
+
+      assert.equal(result.success, false);
+      assert.equal(result.reason, 'logged_out');
+      assert.equal(storage._getStore().vigil, undefined);
+      assert.equal(alarms._getAlarms().size, 0);
+    });
+
+    it('refuses to arm when given a stale catalogue with loggedIn: true against a mocked dead session', async () => {
+      const storage = createMockStorage();
+      const alarms = createMockAlarms();
+      const action = createMockAction();
+      const mockFetchDeadSession = async () => ({
+        ok: true,
+        text: async () => '<html><title>Login - ArchersHub</title><body>Please log in</body></html>',
+      });
+
+      const result = await armVigil({
+        plan: validPlan,
+        startMode: 'now',
+        catalogue: { loggedIn: true },
+        fetchImpl: mockFetchDeadSession,
         storageApi: storage,
         alarmsApi: alarms,
         actionApi: action,
@@ -418,6 +453,7 @@ describe('arming module', () => {
         plan: { academicSessionId: '2025-T1', subjects: [] },
         startMode: 'now',
         catalogue: { loggedIn: true },
+        fetchImpl: mockFetchLoggedIn,
         storageApi: storage,
         alarmsApi: alarms,
         actionApi: action,
@@ -438,6 +474,7 @@ describe('arming module', () => {
         plan: validPlan,
         startMode: 'now',
         catalogue: { loggedIn: true },
+        fetchImpl: mockFetchLoggedIn,
         storageApi: storage,
         alarmsApi: alarms,
         actionApi: action,
@@ -482,6 +519,7 @@ describe('arming module', () => {
         startMode: 'at-time',
         startTime,
         catalogue: { loggedIn: true },
+        fetchImpl: mockFetchLoggedIn,
         storageApi: storage,
         alarmsApi: alarms,
         actionApi: action,
@@ -532,6 +570,7 @@ describe('arming module', () => {
         startMode: 'at-time',
         startTime: pastStartTime,
         catalogue: { loggedIn: true },
+        fetchImpl: mockFetchLoggedIn,
         storageApi: storage,
         alarmsApi: alarms,
         actionApi: action,
@@ -555,6 +594,7 @@ describe('arming module', () => {
         plan: validPlan,
         startMode: 'now',
         catalogue: { loggedIn: true },
+        fetchImpl: mockFetchLoggedIn,
         storageApi: storage,
         alarmsApi: alarms,
         actionApi: action,

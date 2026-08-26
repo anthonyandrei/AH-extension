@@ -327,7 +327,6 @@ export async function checkSession({ fetchImpl = fetch, baseUrl = 'https://arche
  *   plan: { academicSessionId?: string|null, subjects?: Array<object> },
  *   startMode: string,
  *   startTime?: string|number|Date|null,
- *   catalogue?: { loggedIn: boolean },
  *   fetchImpl?: typeof fetch,
  *   baseUrl?: string,
  *   storageApi?: object,
@@ -343,7 +342,6 @@ export async function armVigil({
   plan,
   startMode = 'at-time',
   startTime = null,
-  catalogue,
   fetchImpl,
   baseUrl = 'https://archershub.dlsu.edu.ph',
   storageApi,
@@ -353,14 +351,9 @@ export async function armVigil({
   notificationsApi = typeof chrome !== 'undefined' ? chrome?.notifications : null,
   now = Date.now(),
 }) {
-  // If catalogue was explicitly passed, verify it. Otherwise run 1 authenticated GET check.
-  let isAlive = catalogue?.loggedIn;
-  if (isAlive === undefined) {
-    const sessionRes = await checkSession({ fetchImpl, baseUrl });
-    isAlive = sessionRes.loggedIn;
-  }
-
-  if (isAlive === false) {
+  // SPEC §9: Always perform 1 live authenticated GET at arming time to refuse a dead session.
+  const sessionRes = await checkSession({ fetchImpl, baseUrl });
+  if (!sessionRes || sessionRes.loggedIn !== true) {
     return { success: false, reason: 'logged_out' };
   }
 
