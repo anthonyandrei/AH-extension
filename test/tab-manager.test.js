@@ -259,6 +259,10 @@ describe('tab-manager module', () => {
       });
       const alarms = createMockAlarms();
       alarms.create('owned_tab_reload', { delayInMinutes: 3 });
+      alarms.create('vigil_start', { delayInMinutes: 10 });
+      alarms.create('vigil_keepalive', { delayInMinutes: 5 });
+      alarms.create('vigil_pass', { delayInMinutes: 0.1 });
+      alarms.create('probe_session', { periodInMinutes: 0.5 });
       const action = createMockAction();
       const notifications = createMockNotifications();
 
@@ -282,8 +286,12 @@ describe('tab-manager module', () => {
       assert.equal(storage._getStore().vigil.state, 'aborted');
       assert.deepEqual(storage._getStore().lastAbortedSnapshot, snapshot);
 
-      // Reload alarm cleared
+      // All Vigil alarms cleared (including vigil_pass and probe_session)
       assert.equal(alarms._getAlarms().has('owned_tab_reload'), false);
+      assert.equal(alarms._getAlarms().has('vigil_start'), false);
+      assert.equal(alarms._getAlarms().has('vigil_keepalive'), false);
+      assert.equal(alarms._getAlarms().has('vigil_pass'), false);
+      assert.equal(alarms._getAlarms().has('probe_session'), false);
 
       // Badge set to X dark red (#991B1B)
       assert.equal(action._getBadge().text, 'X');

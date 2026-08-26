@@ -193,6 +193,8 @@ export async function handleUnrecognisedAbort({
     await alarmsApi.clear('owned_tab_reload');
     await alarmsApi.clear('vigil_start');
     await alarmsApi.clear('vigil_keepalive');
+    await alarmsApi.clear('vigil_pass');
+    await alarmsApi.clear('probe_session');
   }
 
   updateBadge({ state: 'aborted', actionApi });
