@@ -444,6 +444,40 @@ describe('classifier module', () => {
       assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.STEP2_UNBOUND);
     });
 
+    it('State 9: Step2Unbound — detected when #tblRegularCourses has only a thead header row and empty tbody, even if #btnEnlistment is visible', () => {
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const thead = createMockElement({
+        tagName: 'thead',
+        children: [
+          createMockElement({ tagName: 'tr', innerHTML: '<th>Course</th><th>Section</th>' }),
+        ],
+      });
+      const tbody = createMockElement({
+        tagName: 'tbody',
+        children: [],
+      });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [thead, tbody] });
+      const btnEnlistment = createMockElement({ id: 'btnEnlistment', style: { display: 'inline-block' } });
+      const doc = createMockDocument({ elements: [step2, tbl, btnEnlistment] });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.STEP2_UNBOUND);
+    });
+
+    it('State 9: Step2Unbound — detected when #tblRegularCourses has only a thead header row and no tbody, even if #btnEnlistment is visible', () => {
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const thead = createMockElement({
+        tagName: 'thead',
+        children: [
+          createMockElement({ tagName: 'tr', innerHTML: '<th>Course</th><th>Section</th>' }),
+        ],
+      });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [thead] });
+      const btnEnlistment = createMockElement({ id: 'btnEnlistment', style: { display: 'inline-block' } });
+      const doc = createMockDocument({ elements: [step2, tbl, btnEnlistment] });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.STEP2_UNBOUND);
+    });
+
     it('State 10: Step2Bound — detected via #STEP2.active, #tblRegularCourses has rows, #btnEnlistment visible', () => {
       const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
       const tbody = createMockElement({
@@ -454,6 +488,28 @@ describe('classifier module', () => {
         ],
       });
       const tbl = createMockElement({ id: 'tblRegularCourses', children: [tbody] });
+      const btnEnlistment = createMockElement({ id: 'btnEnlistment', style: { display: 'inline-block' } });
+      const doc = createMockDocument({ elements: [step2, tbl, btnEnlistment] });
+      const win = createMockWindow({ document: doc });
+      assert.equal(classifyPageState({ document: doc, window: win }).state, PAGE_STATES.STEP2_BOUND);
+    });
+
+    it('State 10: Step2Bound — detected when #tblRegularCourses has both thead header row and tbody data rows with visible #btnEnlistment', () => {
+      const step2 = createMockElement({ id: 'STEP2', classList: ['active'] });
+      const thead = createMockElement({
+        tagName: 'thead',
+        children: [
+          createMockElement({ tagName: 'tr', innerHTML: '<th>Course</th><th>Section</th>' }),
+        ],
+      });
+      const tbody = createMockElement({
+        tagName: 'tbody',
+        children: [
+          createMockElement({ tagName: 'tr', innerHTML: '<td>MATH101</td>' }),
+          createMockElement({ tagName: 'tr', innerHTML: '<td>CS101</td>' }),
+        ],
+      });
+      const tbl = createMockElement({ id: 'tblRegularCourses', children: [thead, tbody] });
       const btnEnlistment = createMockElement({ id: 'btnEnlistment', style: { display: 'inline-block' } });
       const doc = createMockDocument({ elements: [step2, tbl, btnEnlistment] });
       const win = createMockWindow({ document: doc });

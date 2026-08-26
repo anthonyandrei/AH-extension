@@ -645,14 +645,11 @@ export function classifyPageState(options = {}) {
   if (tblRegularCourses) {
     if (tblRegularCourses.querySelectorAll) {
       const tbodyRows = tblRegularCourses.querySelectorAll('tbody tr');
-      if (tbodyRows && tbodyRows.length > 0) {
-        courseRowsCount = tbodyRows.length;
-      } else {
-        const allRows = tblRegularCourses.querySelectorAll('tr');
-        courseRowsCount = allRows ? allRows.length : 0;
+      courseRowsCount = tbodyRows ? tbodyRows.length : 0;
+    } else if (tblRegularCourses.tBodies) {
+      for (const tb of tblRegularCourses.tBodies) {
+        courseRowsCount += tb.rows ? tb.rows.length : (tb.children ? tb.children.filter(c => c.tagName === 'TR').length : 0);
       }
-    } else if (tblRegularCourses.rows) {
-      courseRowsCount = tblRegularCourses.rows.length;
     }
   }
 
