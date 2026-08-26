@@ -2583,6 +2583,18 @@ describe('SPEC §15 Acceptance Checklist Live & Safety Invariants', () => {
       assert.equal(currentDomState, PAGE_STATES.STEP3_REACHED, 'Owned Tab remains on Step 3 as evidence of completion');
     });
   });
+
+  describe('Issue #39 Acceptance: Replace "scheduled" in the manifest description with Armed-aligned language', () => {
+    it('manifest.json description uses Armed-aligned language and does not use "scheduled" or "schedule"', () => {
+      const manifestRaw = fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf-8');
+      const manifest = JSON.parse(manifestRaw);
+
+      assert.doesNotMatch(manifest.description, /scheduled|schedule/i,
+        'manifest.json description must not use "scheduled" or "schedule"');
+      assert.equal(manifest.description,
+        'Automate course enlistment on ArchersHub with armed execution and subject/section management.');
+    });
+  });
 });
 
 

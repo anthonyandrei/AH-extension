@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ArchersHub Enlistment Automator",
   "version": "1.0.0",
-  "description": "Automate course enlistment on ArchersHub with scheduled execution and subject/section management.",
+  "description": "Automate course enlistment on ArchersHub with armed execution and subject/section management.",
   "permissions": [
     "storage",
     "alarms",
